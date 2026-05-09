@@ -9,6 +9,10 @@ struct TopReposView: View {
 
     let repos: [RepoBreakdown]
 
+    private var totalCost: Double {
+        repos.reduce(0) { $0 + max($1.costUSD, 0) }
+    }
+
     // MARK: - Body
 
     var body: some View {
@@ -18,7 +22,7 @@ struct TopReposView: View {
                 placeholderRow("No repository data")
             } else {
                 ForEach(repos) { repo in
-                    repoRow(repo)
+                    repoRow(repo, share: share(for: repo))
                 }
             }
         }
@@ -26,11 +30,11 @@ struct TopReposView: View {
 
     // MARK: - Row
 
-    /// Single row: repo label (truncated in the middle if long) + cost on the right.
+    /// Single row: proportional background fill + repo label + cost.
     ///
     /// Middle truncation preserves both the owner prefix and the repo-name suffix
     /// which together are the most identifying parts of an "owner/name" label.
-    private func repoRow(_ repo: RepoBreakdown) -> some View {
+    private func repoRow(_ repo: RepoBreakdown, share: Double) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(repo.repo)
                 .font(.caption)
@@ -45,9 +49,25 @@ struct TopReposView: View {
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
         }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(alignment: .leading) {
+            GeometryReader { proxy in
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.12))
+                    .frame(width: proxy.size.width * share)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .accessibilityLabel("\(repo.repo), \(Formatters.formatCost(repo.costUSD)), \(Int((share * 100).rounded())) percent of shown repository cost")
     }
 
     // MARK: - Helpers
+
+    private func share(for repo: RepoBreakdown) -> Double {
+        guard totalCost > 0 else { return 0 }
+        return min(max(repo.costUSD / totalCost, 0), 1)
+    }
 
     private func placeholderRow(_ text: String) -> some View {
         Text(text)

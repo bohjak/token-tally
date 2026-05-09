@@ -40,13 +40,15 @@ enum AnalyticsQueries {
 
         let todayStart = calendar.startOfDay(for: now)
         let weekStart = calendar.date(byAdding: .day, value: -6, to: todayStart) ?? todayStart
+        let chartStart = calendar.date(byAdding: .day, value: -146, to: todayStart) ?? todayStart
         let todayMillis = milliseconds(since1970: todayStart)
         let weekMillis = milliseconds(since1970: weekStart)
+        let chartMillis = milliseconds(since1970: chartStart)
 
         let today = try database.queryUsageBucket(since: todayMillis)
         let week = try database.queryUsageBucket(since: weekMillis)
-        let rawDailyCost = try database.queryDailyCost(since: weekMillis)
-        let dailyCost = fillMissingDays(rawDailyCost, endingAt: todayStart, calendar: calendar)
+        let rawDailyCost = try database.queryDailyCost(since: chartMillis)
+        let dailyCost = fillMissingDays(rawDailyCost, endingAt: todayStart, days: 147, calendar: calendar)
         let topModels = try database.queryTopModels(since: weekMillis, schema: schema)
         let topRepos = try database.queryTopRepos(since: weekMillis)
 
