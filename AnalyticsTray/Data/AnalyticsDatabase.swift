@@ -117,12 +117,16 @@ final class AnalyticsDatabase {
 
     func queryTopModels(since lowerBoundMilliseconds: Int64, schema: AnalyticsSchema) throws -> [ModelBreakdown] {
         let modelExpression = schema.hasMessageModelID
-            ? "COALESCE(m.model_id, t.model_id, 'unknown')"
-            : "COALESCE(t.model_id, 'unknown')"
+            ? "COALESCE(NULLIF(m.model_id, ''), NULLIF(t.model_id, ''), 'unattributed')"
+            : "COALESCE(NULLIF(t.model_id, ''), 'unattributed')"
+        // Rows that still cannot be attributed to a model are grouped under an
+        // explicit "unattributed" label. This keeps the breakdown honest without
+        // inventing a fake model named "unknown".
+        //
         // Use positional GROUP BY 1 to avoid ambiguity: both llm_messages and
         // turns have a model_id column. SQLite 3.43 treats GROUP BY model_id as
         // ambiguous and returns an error; GROUP BY 1 groups on the first SELECT
-        // expression (the COALESCE alias) unambiguously.
+        // expression unambiguously.
         let sql = """
         SELECT
           \(modelExpression) AS mdl,
@@ -142,7 +146,7 @@ final class AnalyticsDatabase {
             var rows: [ModelBreakdown] = []
             while try step(statement, sql: sql) == SQLITE_ROW {
                 rows.append(ModelBreakdown(
-                    modelID: columnString(statement, index: 0) ?? "unknown",
+                    modelID: columnString(statement, index: 0) ?? "unattributed",
                     costUSD: sqlite3_column_double(statement, 1),
                     billableTokens: sqlite3_column_int64(statement, 2),
                     turns: sqlite3_column_int64(statement, 3)

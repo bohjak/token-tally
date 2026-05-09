@@ -54,13 +54,13 @@ struct AnalyticsQueriesTests {
         #expect(models.first == ModelBreakdown(modelID: "turn-model", costUSD: 1.5, billableTokens: 30, turns: 1))
     }
 
-    @Test func topModelsShowUnknownWhenNoModelIsRecorded() throws {
+    @Test func topModelsShowUnattributedWhenNoModelIsRecorded() throws {
         // Build a database where both llm_messages.model_id and turns.model_id are NULL.
         let dbPath = try makeDatabaseWithNullModels()
 
         let models = try AnalyticsQueries.topModels(databasePath: dbPath, since: 1_700_000_000_000)
 
-        #expect(models.first?.modelID == "unknown")
+        #expect(models.first?.modelID == "unattributed")
     }
 
     // MARK: Top repositories
