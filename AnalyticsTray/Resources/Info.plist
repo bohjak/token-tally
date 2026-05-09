@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.pi.analytics-tray</string>
+    <key>CFBundleName</key>
+    <string>AnalyticsTray</string>
+    <key>CFBundleDisplayName</key>
+    <string>pi Analytics Tray</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+
+    <!-- Suppress Dock icon and application menu when run as a .app bundle. -->
+    <!-- The programmatic setActivationPolicy(.accessory) call in              -->
+    <!-- AnalyticsTrayApp.main() covers the `swift run` / bare-executable case. -->
+    <key>LSUIElement</key>
+    <true/>
+
+    <key>NSHighResolutionCapable</key>
+    <true/>
+
+    <key>NSHumanReadableCopyright</key>
+    <string>Local utility — no rights reserved.</string>
+</dict>
+</plist>
