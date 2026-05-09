@@ -159,6 +159,121 @@ struct AnalyticsQueriesTests {
         #expect(filled.allSatisfy { $0.costUSD == 0 })
     }
 
+    // MARK: Intraday usage query
+
+    @Test func intradayUsageGroupsRowsIntoFifteenMinuteBuckets() throws {
+        // Four rows spread across three 15-minute buckets:
+        //   00:02 and 00:14 → 00:00 bucket (epoch 1704067200)
+        //   00:15           → 00:15 bucket (epoch 1704068100)
+        //   00:31           → 00:30 bucket (epoch 1704069000)
+        //
+        // All timestamps are UTC-based epoch milliseconds. The lower bound is
+        // 2024-01-01 00:00:00 UTC = 1704067200000 ms.
+        let dbPath = try makeIntradayDatabase()
+        let midnight: Int64 = 1_704_067_200_000
+
+        let points = try AnalyticsQueries.intradayUsage(databasePath: dbPath, since: midnight)
+
+        #expect(points.count == 3)
+
+        let bucket0000 = Date(timeIntervalSince1970: 1_704_067_200)
+        let bucket0015 = Date(timeIntervalSince1970: 1_704_068_100)
+        let bucket0030 = Date(timeIntervalSince1970: 1_704_069_000)
+
+        #expect(points[0].bucketStart == bucket0000)
+        #expect(points[0].costUSD == 0.8, "00:00 bucket should sum rows at 00:02 and 00:14")
+        #expect(points[0].billableTokens == 180)
+
+        #expect(points[1].bucketStart == bucket0015)
+        #expect(points[1].costUSD == 1.0)
+        #expect(points[1].billableTokens == 200)
+
+        #expect(points[2].bucketStart == bucket0030)
+        #expect(points[2].costUSD == 0.2)
+        #expect(points[2].billableTokens == 50)
+    }
+
+    @Test func intradayUsageExcludesRowsBeforeLowerBound() throws {
+        let dbPath = try makeIntradayDatabase()
+        // Pass a lower bound after all fixture rows — expect no results.
+        let future: Int64 = 9_999_999_999_000
+
+        let points = try AnalyticsQueries.intradayUsage(databasePath: dbPath, since: future)
+
+        #expect(points.isEmpty)
+    }
+
+    // MARK: Fill missing intraday buckets
+
+    @Test func fillMissingIntradayBucketsProducesMidnightToCurrentBucketWindow() {
+        // start = 2024-01-01 00:00:00 UTC, end = 2024-01-01 01:30:00 UTC
+        // 15-min buckets: 00:00, 00:15, 00:30, 00:45, 01:00, 01:15, 01:30 → 7 buckets
+        let start = Date(timeIntervalSince1970: 1_704_067_200)
+        let end   = Date(timeIntervalSince1970: 1_704_067_200 + 90 * 60)
+
+        let filled = AnalyticsQueries.fillMissingIntradayBuckets([], from: start, through: end)
+
+        #expect(filled.count == 7)
+        #expect(filled.first?.bucketStart == start)
+        #expect(filled.last?.bucketStart  == Date(timeIntervalSince1970: 1_704_067_200 + 90 * 60))
+        #expect(filled.allSatisfy { $0.costUSD == 0 && $0.billableTokens == 0 })
+    }
+
+    @Test func fillMissingIntradayBucketsPreservesExistingPoints() {
+        let start   = Date(timeIntervalSince1970: 1_704_067_200)
+        let end     = Date(timeIntervalSince1970: 1_704_067_200 + 90 * 60)
+        // One existing point in the 00:15 bucket
+        let bucket0015 = Date(timeIntervalSince1970: 1_704_068_100)
+        let existing   = IntradayUsagePoint(bucketStart: bucket0015, costUSD: 5.0, billableTokens: 999)
+
+        let filled = AnalyticsQueries.fillMissingIntradayBuckets([existing], from: start, through: end)
+
+        #expect(filled.count == 7)
+        let preserved = filled.first { $0.bucketStart == bucket0015 }
+        #expect(preserved?.costUSD == 5.0)
+        #expect(preserved?.billableTokens == 999)
+        // All other buckets should be zero
+        #expect(filled.filter { $0.bucketStart != bucket0015 }.allSatisfy { $0.costUSD == 0 })
+    }
+
+    @Test func fillMissingIntradayBucketsWithNoDataProducesAllZeros() {
+        let start = Date(timeIntervalSince1970: 1_704_067_200)
+        let end   = Date(timeIntervalSince1970: 1_704_067_200 + 30 * 60) // 00:30
+
+        let filled = AnalyticsQueries.fillMissingIntradayBuckets([], from: start, through: end)
+
+        // 00:00, 00:15, 00:30 → 3 buckets
+        #expect(filled.count == 3)
+        #expect(filled.allSatisfy { $0.costUSD == 0 && $0.billableTokens == 0 })
+    }
+
+    @Test func fillMissingIntradayBucketsEndBeforeStartProducesEmpty() {
+        // Guard against callers that accidentally swap start/end.
+        let start = Date(timeIntervalSince1970: 1_704_067_200 + 3600)
+        let end   = Date(timeIntervalSince1970: 1_704_067_200)
+
+        let filled = AnalyticsQueries.fillMissingIntradayBuckets([], from: start, through: end)
+
+        #expect(filled.isEmpty)
+    }
+
+    @Test func loadSnapshotIncludesFilledIntradayUsage() throws {
+        let dbPath = try makeIntradayDatabase()
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = Date(timeIntervalSince1970: 1_704_067_200 + 97 * 60) // 2024-01-01 01:37 UTC
+
+        let snapshot = try AnalyticsQueries.loadSnapshot(databasePath: dbPath, now: now, calendar: calendar)
+
+        #expect(snapshot.intradayUsage.count == 7)
+        #expect(snapshot.intradayUsage.first?.bucketStart == Date(timeIntervalSince1970: 1_704_067_200))
+        #expect(snapshot.intradayUsage.last?.bucketStart == Date(timeIntervalSince1970: 1_704_067_200 + 90 * 60))
+        #expect(snapshot.intradayUsage[0].costUSD == 0.8)
+        #expect(snapshot.intradayUsage[1].costUSD == 1.0)
+        #expect(snapshot.intradayUsage[2].costUSD == 0.2)
+        #expect(snapshot.intradayUsage.dropFirst(3).allSatisfy { $0.costUSD == 0 })
+    }
+
     // MARK: Error states
 
     @Test func missingDatabaseIsRecoverableError() throws {
@@ -386,6 +501,43 @@ private extension AnalyticsQueriesTests {
           (id, turn_id, session_id, ts, input_tokens, output_tokens,
            cache_read_tokens, cache_write_tokens, cost_total, model_id)
         VALUES ('m1', 't1', 's1', 1704067200000, 5, 5, 0, 0, 0.5, 'gpt-4');
+        """)
+        return path
+    }
+
+    /// Creates a database with four rows spread across three 15-minute UTC buckets
+    /// anchored at 2024-01-01 00:00:00 UTC (epoch 1704067200):
+    ///
+    ///   00:02 (ts=1704067320000) cost=0.50 tokens=100  → 00:00 bucket
+    ///   00:14 (ts=1704068040000) cost=0.30 tokens=80   → 00:00 bucket
+    ///   00:15 (ts=1704068100000) cost=1.00 tokens=200  → 00:15 bucket
+    ///   00:31 (ts=1704069060000) cost=0.20 tokens=50   → 00:30 bucket
+    func makeIntradayDatabase() throws -> String {
+        let path = temporaryDirectory().appendingPathComponent(UUID().uuidString + "-intraday.db").path
+        try executeSQL(path: path, sql: """
+        CREATE TABLE sessions (
+          id TEXT PRIMARY KEY, repo_owner TEXT, repo_name TEXT,
+          repo_remote TEXT, cwd TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE turns (id TEXT PRIMARY KEY, model_id TEXT);
+        CREATE TABLE llm_messages (
+          id TEXT PRIMARY KEY, turn_id TEXT NOT NULL, session_id TEXT NOT NULL,
+          ts INTEGER NOT NULL, input_tokens INTEGER NOT NULL DEFAULT 0,
+          output_tokens INTEGER NOT NULL DEFAULT 0,
+          cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+          cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+          cost_total REAL NOT NULL DEFAULT 0, model_id TEXT
+        );
+        INSERT INTO sessions VALUES ('s1', 'owner', 'repo', NULL, '/repo');
+        INSERT INTO turns VALUES ('t1', 'model-a');
+        INSERT INTO llm_messages
+          (id, turn_id, session_id, ts, input_tokens, output_tokens,
+           cache_read_tokens, cache_write_tokens, cost_total, model_id)
+        VALUES
+          ('m1', 't1', 's1', 1704067320000,  60,  40, 0, 0, 0.50, 'model-a'),
+          ('m2', 't1', 's1', 1704068040000,  50,  30, 0, 0, 0.30, 'model-a'),
+          ('m3', 't1', 's1', 1704068100000, 100, 100, 0, 0, 1.00, 'model-a'),
+          ('m4', 't1', 's1', 1704069060000,  25,  25, 0, 0, 0.20, 'model-a');
         """)
         return path
     }

@@ -44,7 +44,7 @@ struct DailyCostChartView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            sectionLabel("21-Week Cost")
+            sectionLabel("21-Week Usage")
             tileChart
         }
     }

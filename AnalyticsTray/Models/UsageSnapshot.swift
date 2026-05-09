@@ -15,10 +15,14 @@ struct UsageSnapshot: Equatable {
     /// Aggregated metrics for the rolling 7-day window (today + 6 prior days).
     let week: UsageBucket
 
-    /// Per-day cost points for the 7-day bar chart.
+    /// Per-day cost points for the 21-week tile chart.
     /// The store/query layer fills missing days with zero-cost `DailyCostPoint`s
-    /// so the chart always shows a stable 7-bar layout.
+    /// so the chart always shows a stable layout.
     let dailyCost: [DailyCostPoint]
+
+    /// Today's 15-minute usage buckets for the Today-card decorative background.
+    /// The store/query layer fills missing buckets with zero-value points.
+    let intradayUsage: [IntradayUsagePoint]
 
     /// Top five models by cost, descending. May contain fewer than five entries
     /// if fewer models were used in the window.

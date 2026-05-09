@@ -115,6 +115,44 @@ final class AnalyticsDatabase {
         }
     }
 
+    func queryIntradayUsage(
+        since lowerBoundMilliseconds: Int64,
+        bucketMinutes: Int
+    ) throws -> [IntradayUsagePoint] {
+        precondition(bucketMinutes > 0, "bucketMinutes must be positive")
+        // ?1 is the bucket size in seconds, reused twice so it only needs one
+        // binding. SQLite numbered parameters (?N) can appear multiple times and
+        // are all set by a single sqlite3_bind_int64 call at index N.
+        let sql = """
+        SELECT
+          ((ts / 1000) / ?1) * ?1 AS bucket_epoch_seconds,
+          COALESCE(SUM(cost_total), 0) AS cost_usd,
+          COALESCE(SUM(input_tokens + output_tokens), 0) AS billable_tokens
+        FROM llm_messages
+        WHERE ts >= ?2
+        GROUP BY bucket_epoch_seconds
+        ORDER BY bucket_epoch_seconds;
+        """
+
+        let bucketSeconds = Int64(bucketMinutes * 60)
+
+        return try withStatement(sql) { statement in
+            sqlite3_bind_int64(statement, 1, bucketSeconds)
+            sqlite3_bind_int64(statement, 2, lowerBoundMilliseconds)
+            var rows: [IntradayUsagePoint] = []
+            while try step(statement, sql: sql) == SQLITE_ROW {
+                let epochSeconds = sqlite3_column_int64(statement, 0)
+                let bucketStart = Date(timeIntervalSince1970: TimeInterval(epochSeconds))
+                rows.append(IntradayUsagePoint(
+                    bucketStart: bucketStart,
+                    costUSD: sqlite3_column_double(statement, 1),
+                    billableTokens: sqlite3_column_int64(statement, 2)
+                ))
+            }
+            return rows
+        }
+    }
+
     func queryTopModels(since lowerBoundMilliseconds: Int64, schema: AnalyticsSchema) throws -> [ModelBreakdown] {
         let modelExpression = schema.hasMessageModelID
             ? "COALESCE(NULLIF(m.model_id, ''), NULLIF(t.model_id, ''), 'unattributed')"

@@ -164,8 +164,20 @@ struct PopoverView: View {
 
     private func summarySection(_ snapshot: UsageSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            SummaryCard(title: "Today",     bucket: snapshot.today, showTurns: true)
-            SummaryCard(title: "This week", bucket: snapshot.week,  showTurns: false)
+            SummaryCard(
+                title: "Today",
+                bucket: snapshot.today,
+                showTurns: true,
+                backgroundChartValues: snapshot.intradayUsage.map(\.costUSD)
+            )
+            SummaryCard(
+                title: "Past 7 days",
+                bucket: snapshot.week,
+                showTurns: false,
+                backgroundChartValues: Array(snapshot.dailyCost.suffix(7)).map(\.costUSD),
+                backgroundChartTrimsZeroEdges: false,
+                backgroundChartSmoothingWindow: 1
+            )
 
             // 7-day cost chart — always shown when we have loaded data, even if
             // all bars are zero (sparse DB / new install).  fillMissingDays in
