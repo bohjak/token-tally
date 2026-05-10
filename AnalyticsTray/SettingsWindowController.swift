@@ -3,8 +3,8 @@ import SwiftUI
 
 /// Owns and presents the Settings window.
 ///
-/// Usage — call `SettingsWindowController.show(settings:)` from any `@MainActor`
-/// context (e.g. the popover footer button). The window is created lazily on
+/// Usage — call `SettingsWindowController.show(settings:onRefresh:)` from any
+/// `@MainActor` context. The window is created lazily on
 /// first call and reused on subsequent calls so the user's in-progress edits
 /// are not lost if they close and reopen settings quickly.
 ///
@@ -25,9 +25,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     /// - Parameter settings: The shared `AppSettings` instance that backs
     ///   `AnalyticsStore`. Must be the same object already held by
     ///   `AnalyticsEnvironment` so settings changes propagate immediately.
-    static func show(settings: AppSettings) {
+    static func show(
+        settings: AppSettings,
+        onRefresh: @escaping @MainActor () -> Void = {}
+    ) {
         if shared == nil {
-            shared = SettingsWindowController(settings: settings)
+            shared = SettingsWindowController(settings: settings, onRefresh: onRefresh)
         }
         shared?.showWindow(nil)
         shared?.window?.makeKeyAndOrderFront(nil)
@@ -38,8 +41,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     // MARK: - Init
 
-    private init(settings: AppSettings) {
-        let rootView = SettingsView(settings: settings)
+    private init(settings: AppSettings, onRefresh: @escaping @MainActor () -> Void) {
+        let rootView = SettingsView(settings: settings, onRefresh: onRefresh)
         let hostingController = NSHostingController(rootView: rootView)
 
         // Create the window. isReleasedWhenClosed = false keeps the window (and
@@ -49,8 +52,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         window.title = "pi Analytics — Settings"
         // Title, close button, but no miniaturize/zoom/resize handles.
         window.styleMask = [.titled, .closable]
-        window.contentMinSize = NSSize(width: 420, height: 460)
-        window.setContentSize(NSSize(width: 420, height: 460))
+        window.contentMinSize = NSSize(width: 420, height: 500)
+        window.setContentSize(NSSize(width: 420, height: 500))
         window.isReleasedWhenClosed = false
         window.center()
 
@@ -60,13 +63,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
-        fatalError("SettingsWindowController must be created with init(settings:)")
+        fatalError("SettingsWindowController must be created with init(settings:onRefresh:)")
     }
 
     // MARK: - NSWindowDelegate
 
     /// When the user closes the settings window, clear the shared instance so
-    /// the next call to `show(settings:)` recreates a fresh window centered on
+    /// the next call to `show(settings:onRefresh:)` recreates a fresh window centered on
     /// screen rather than restoring a stale position.
     ///
     /// Note: because `isReleasedWhenClosed = false` the underlying NSWindow is

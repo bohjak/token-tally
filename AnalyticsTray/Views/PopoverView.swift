@@ -73,19 +73,25 @@ extension Notification.Name {
 /// - Create and own an `AnalyticsStore` (via `AnalyticsEnvironment`).
 /// - Trigger a refresh whenever the popover appears.
 /// - Switch over `StoreState` to show the appropriate content.
-/// - Provide footer actions: Refresh, Open Analytics Folder, Settings, Quit.
+/// - Provide header actions: Settings and Quit.
 /// - Broadcast menu bar title changes via `NotificationCenter` for `StatusItemController`.
 @MainActor
 struct PopoverView: View {
 
     @ObservedObject private var env: AnalyticsEnvironment
+    private let closePopover: @MainActor () -> Void
 
-    init() {
+    init(closePopover: @escaping @MainActor () -> Void = {}) {
         env = AnalyticsEnvironment()
+        self.closePopover = closePopover
     }
 
-    init(environment: AnalyticsEnvironment) {
+    init(
+        environment: AnalyticsEnvironment,
+        closePopover: @escaping @MainActor () -> Void = {}
+    ) {
         env = environment
+        self.closePopover = closePopover
     }
 
     var body: some View {
@@ -94,8 +100,6 @@ struct PopoverView: View {
             Divider()
             contentArea
                 .frame(maxWidth: .infinity)
-            Divider()
-            footerBar
         }
         .frame(width: 280)
         // Trigger data load whenever the popover becomes visible.
@@ -118,7 +122,22 @@ struct PopoverView: View {
                 ProgressView()
                     .controlSize(.small)
             }
+
+            Button(action: openSettings) {
+                Image(systemName: "gear")
+                    .imageScale(.medium)
+            }
+            .help("Settings")
+
+            Button(action: quitApp) {
+                Image(systemName: "power")
+                    .imageScale(.medium)
+            }
+            .help("Quit")
         }
+        .buttonStyle(.plain)
+        .font(.caption)
+        .foregroundStyle(.secondary)
         .padding(.horizontal, 14)
         .padding(.top, 14)
         .padding(.bottom, 10)
@@ -214,58 +233,18 @@ struct PopoverView: View {
         .padding(.vertical, 40)
     }
 
-    // MARK: - Footer bar
-
-    private var footerBar: some View {
-        HStack(spacing: 6) {
-            // Refresh
-            Button(action: { env.store.refresh() }) {
-                Image(systemName: "arrow.clockwise")
-                    .imageScale(.medium)
-            }
-            .help("Refresh data now")
-
-            // Open the analytics folder in Finder
-            Button(action: openAnalyticsFolder) {
-                Image(systemName: "folder")
-                    .imageScale(.medium)
-            }
-            .help("Open analytics folder in Finder")
-
-            Spacer()
-
-            // Settings — placeholder until T7 implements SettingsView
-            Button(action: openSettings) {
-                Image(systemName: "gear")
-                    .imageScale(.medium)
-            }
-            .help("Settings")
-
-            Divider()
-                .frame(height: 12)
-
-            // Quit
-            Button("Quit") {
-                NSApplication.shared.terminate(nil)
-            }
-        }
-        .buttonStyle(.plain)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-    }
-
     // MARK: - Actions
 
-    private func openAnalyticsFolder() {
-        let url = Paths.analyticsFolder(forDatabasePath: env.settings.databasePath)
-        NSWorkspace.shared.open(url)
+    private func openSettings() {
+        // The settings window is the next focus target; close the transient menu
+        // bar popover so it does not linger behind or over the settings UI.
+        SettingsWindowController.show(settings: env.settings) {
+            env.store.refresh()
+        }
+        closePopover()
     }
 
-    private func openSettings() {
-        // Open the settings window. The popover stays open (the user can dismiss
-        // it separately); the settings window is brought to the foreground.
-        SettingsWindowController.show(settings: env.settings)
+    private func quitApp() {
+        NSApplication.shared.terminate(nil)
     }
 }

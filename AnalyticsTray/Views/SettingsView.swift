@@ -13,6 +13,12 @@ import ServiceManagement
 struct SettingsView: View {
 
     @ObservedObject var settings: AppSettings
+    let onRefresh: @MainActor () -> Void
+
+    init(settings: AppSettings, onRefresh: @escaping @MainActor () -> Void = {}) {
+        self.settings = settings
+        self.onRefresh = onRefresh
+    }
 
     // MARK: - Local state
 
@@ -51,7 +57,7 @@ struct SettingsView: View {
         // NSHostingController does not always derive a useful intrinsic height
         // for macOS Form content inside an AppKit-created settings window. Use
         // an explicit size so the window does not open as an empty shell.
-        .frame(width: 420, height: 460)
+        .frame(width: 420, height: 500)
         .onAppear { validatePath() }
         .onChange(of: settings.databasePath) { _, _ in validatePath() }
     }
@@ -69,6 +75,8 @@ struct SettingsView: View {
 
                 Button("Browse…") { browseForDatabase() }
             }
+
+            Button("Open Data Source") { openAnalyticsFolder() }
 
             // Inline warning, shown only when the path is invalid.
             if !pathIsValid {
@@ -98,6 +106,8 @@ struct SettingsView: View {
                 }
             }
             // Inline/menu-style on macOS inside a grouped Form.
+
+            Button("Refresh Now") { onRefresh() }
         }
     }
 
@@ -186,6 +196,11 @@ struct SettingsView: View {
         if panel.runModal() == .OK, let url = panel.url {
             settings.databasePath = url.path
         }
+    }
+
+    private func openAnalyticsFolder() {
+        let url = Paths.analyticsFolder(forDatabasePath: settings.databasePath)
+        NSWorkspace.shared.open(url)
     }
 
     // MARK: - Launch at login

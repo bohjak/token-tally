@@ -25,6 +25,9 @@ final class PopoverController {
     private var eventMonitor: Any?
 
     init() {
+        // Let the hosted SwiftUI view drive the final height. A narrow default
+        // keeps first layout deterministic without imposing the fixed-height
+        // clipping that the custom NSPanel version introduced.
         popover.contentSize = NSSize(width: 280, height: 320)
 
         // .applicationDefined: we own open/close logic entirely.
@@ -37,7 +40,9 @@ final class PopoverController {
         // environment is also used for startup refreshes before the popover is
         // opened for the first time.
         popover.contentViewController = NSHostingController(
-            rootView: PopoverView(environment: environment)
+            rootView: PopoverView(environment: environment) { [weak self] in
+                self?.close()
+            }
         )
     }
 
@@ -62,14 +67,32 @@ final class PopoverController {
     /// Open the popover anchored below the given status bar button.
     func show(relativeTo button: NSStatusBarButton) {
         anchorButton = button
+        keepStatusItemHighlighted(button)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         installEventMonitor()
     }
 
     /// Close the popover and tear down the event monitor.
     func close() {
+        anchorButton?.highlight(false)
         popover.performClose(nil)
         removeEventMonitor()
+    }
+
+    private func keepStatusItemHighlighted(_ button: NSStatusBarButton) {
+        button.highlight(true)
+
+        // The status button action fires on mouse-down for responsiveness.
+        // AppKit clears the native pressed highlight on mouse-up after the
+        // action has already run, so re-apply the native highlight afterward.
+        DispatchQueue.main.async { [weak button, weak self] in
+            guard let self, self.popover.isShown else { return }
+            button?.highlight(true)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak button, weak self] in
+            guard let self, self.popover.isShown else { return }
+            button?.highlight(true)
+        }
     }
 
     // MARK: - Event monitor
