@@ -67,6 +67,9 @@ enum Formatters {
     /// menuBarTitle(tokens: 284_000, cost: 1.42, mode: .tokensOnly)
     ///     → "π 284k"
     ///
+    /// menuBarTitle(tokens: 284_000, cost: 1.42, mode: .costOnly)
+    ///     → "π $1.42"
+    ///
     /// menuBarTitle(tokens: 284_000, cost: 1.42, mode: .iconOnly)
     ///     → "π"
     /// ```
@@ -80,6 +83,8 @@ enum Formatters {
             return "π \(formatTokens(tokens)) · \(formatCost(cost))"
         case .tokensOnly:
             return "π \(formatTokens(tokens))"
+        case .costOnly:
+            return "π \(formatCost(cost))"
         case .iconOnly:
             return "π"
         }

@@ -8,6 +8,8 @@ enum MenuBarDisplayMode: String, CaseIterable, Identifiable {
     case combinedTokensCost
     /// "π 284k" — tokens only.
     case tokensOnly
+    /// "π $1.42" — cost only.
+    case costOnly
     /// "π" — icon only; no numbers.
     case iconOnly
 
@@ -18,6 +20,7 @@ enum MenuBarDisplayMode: String, CaseIterable, Identifiable {
         switch self {
         case .combinedTokensCost: return "Tokens + cost"
         case .tokensOnly:         return "Tokens only"
+        case .costOnly:           return "Cost only"
         case .iconOnly:           return "Icon only"
         }
     }

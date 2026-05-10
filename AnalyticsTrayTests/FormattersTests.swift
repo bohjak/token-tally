@@ -103,6 +103,13 @@ struct MenuBarTitleTests {
         )
     }
 
+    @Test func costOnly() {
+        #expect(
+            Formatters.menuBarTitle(tokens: 284_000, cost: 1.42, mode: .costOnly)
+            == "π $1.42"
+        )
+    }
+
     @Test func iconOnly() {
         #expect(
             Formatters.menuBarTitle(tokens: 284_000, cost: 1.42, mode: .iconOnly)
