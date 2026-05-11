@@ -25,17 +25,21 @@ final class AnalyticsEnvironment: ObservableObject {
         settings = s
         store = AnalyticsStore(settings: s)
 
-        // PopoverView observes this environment object, not the nested store
-        // directly. Forward store changes so SwiftUI re-renders when refreshes
-        // move from idle/loading to loaded/error states.
+        // Forward store changes so SwiftUI re-renders when refreshes transition
+        // between idle/loading and loaded/error states.
         store.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
 
-        // Broadcast title updates from the store itself, not from PopoverView's
-        // appearance lifecycle. This lets startup refreshes update the menu bar
-        // before the user opens the popover for the first time.
+        // Broadcast title updates so StatusItemController can update the label
+        // without a direct reference to the store.
+        //
+        // dropFirst() suppresses the initial placeholder that AnalyticsStore
+        // emits before its first real refresh. StatusItemController sets its
+        // own "Σ …" placeholder at init time, which should remain
+        // visible until actual data arrives.
         store.$menuBarTitle
+            .dropFirst()
             .removeDuplicates()
             .sink { title in
                 NotificationCenter.default.post(
@@ -55,26 +59,23 @@ final class AnalyticsEnvironment: ObservableObject {
 // MARK: - Notification name
 
 extension Notification.Name {
-    /// Posted by `PopoverView` whenever `AnalyticsStore.menuBarTitle` changes.
-    ///
-    /// `userInfo["title"]` contains the new `String` value. `StatusItemController`
-    /// (wired up in T7 or later) can observe this to update the `NSStatusItem`
-    /// label without needing a direct reference to the store.
+    /// Posted by `AnalyticsEnvironment` whenever `AnalyticsStore.menuBarTitle`
+    /// changes. `userInfo["title"]` contains the new `String` value.
+    /// `StatusItemController` observes this to update the `NSStatusItem` label.
     static let analyticsMenuBarTitleChanged = Notification.Name(
-        "com.pi.analyticstray.menuBarTitleChanged"
+        "com.token-tally.menuBarTitleChanged"
     )
 }
 
 // MARK: - PopoverView
 
-/// The root SwiftUI view hosted inside `NSPopover` via `NSHostingController`.
+/// Root SwiftUI view hosted inside `NSPopover` via `NSHostingController`.
 ///
 /// Responsibilities:
-/// - Create and own an `AnalyticsStore` (via `AnalyticsEnvironment`).
-/// - Trigger a refresh whenever the popover appears.
-/// - Switch over `StoreState` to show the appropriate content.
-/// - Provide header actions: Settings and Quit.
-/// - Broadcast menu bar title changes via `NotificationCenter` for `StatusItemController`.
+/// - Own an `AnalyticsEnvironment` (settings + store) for the popover lifetime.
+/// - Trigger a refresh when the popover appears.
+/// - Switch over `StoreState` to show the appropriate content section.
+/// - Show header controls (settings, quit) and a footer action row.
 @MainActor
 struct PopoverView: View {
 
@@ -102,7 +103,6 @@ struct PopoverView: View {
                 .frame(maxWidth: .infinity)
         }
         .frame(width: 280)
-        // Trigger data load whenever the popover becomes visible.
         .onAppear {
             env.store.refreshOnPopoverOpen()
         }
@@ -112,12 +112,12 @@ struct PopoverView: View {
 
     private var headerBar: some View {
         HStack {
-            Text("pi Analytics")
+            Text("ToTally")
                 .font(.headline)
             Spacer()
-            // Show a compact spinner alongside the title when a refresh is running
-            // and we already have data to display (avoids the spinner + full loading
-            // view appearing at the same time).
+            // Compact spinner alongside the title when a background refresh is
+            // running and we already have data to display (avoids showing the
+            // spinner + full loading view simultaneously).
             if case .loading = env.store.state, env.store.lastSnapshot != nil {
                 ProgressView()
                     .controlSize(.small)
@@ -133,7 +133,7 @@ struct PopoverView: View {
                 Image(systemName: "power")
                     .imageScale(.medium)
             }
-            .help("Quit")
+            .help("Quit ToTally")
         }
         .buttonStyle(.plain)
         .font(.caption)
@@ -150,13 +150,11 @@ struct PopoverView: View {
         switch env.store.state {
 
         case .idle:
-            // Before the first refresh; show a neutral loading view.
             loadingPlaceholder
 
         case .loading:
-            // A refresh is in flight.
             if let snapshot = env.store.lastSnapshot {
-                // Prefer stale data over a blank loading screen — less disorienting.
+                // Prefer stale data over a blank loading screen.
                 summarySection(snapshot)
             } else {
                 loadingPlaceholder
@@ -183,12 +181,16 @@ struct PopoverView: View {
 
     private func summarySection(_ snapshot: UsageSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 12) {
+
+            // 1. Today summary.
             SummaryCard(
                 title: "Today",
                 bucket: snapshot.today,
                 showTurns: true,
                 backgroundChartValues: snapshot.intradayUsage.map(\.costUSD)
             )
+
+            // 2. This week summary.
             SummaryCard(
                 title: "Past 7 days",
                 bucket: snapshot.week,
@@ -198,25 +200,47 @@ struct PopoverView: View {
                 backgroundChartSmoothingWindow: 1
             )
 
-            // 7-day cost chart — always shown when we have loaded data, even if
-            // all bars are zero (sparse DB / new install).  fillMissingDays in
-            // AnalyticsQueries guarantees the array has exactly 7 entries.
+            // 3. 7-day cost chart.
             if !snapshot.dailyCost.isEmpty {
                 DailyCostChartView(points: snapshot.dailyCost)
             }
 
-            // Top models — omit the section entirely when the array is empty
-            // (edge case: data in bucket but no messages with model attribution).
+            // 4. Top models.
             if !snapshot.topModels.isEmpty {
                 TopModelsView(models: snapshot.topModels)
             }
 
-            // Top repos — same defensive guard.
+            // 5. Top repositories.
             if !snapshot.topRepos.isEmpty {
                 TopReposView(repos: snapshot.topRepos)
             }
+
+            // 6. Footer actions.
+            footerActions
+
         }
         .padding(12)
+    }
+
+    // MARK: - Footer actions
+
+    private var footerActions: some View {
+        HStack(spacing: 8) {
+            Button(action: { env.store.refresh() }) {
+                Label("Refresh", systemImage: "arrow.clockwise")
+            }
+            .help("Refresh now")
+
+            Button(action: openAnalyticsFolder) {
+                Label("Open Folder", systemImage: "folder")
+            }
+            .help("Open analytics data folder in Finder")
+
+            Spacer()
+        }
+        .buttonStyle(.plain)
+        .font(.caption)
+        .foregroundStyle(.secondary)
     }
 
     // MARK: - Loading placeholder
@@ -236,12 +260,15 @@ struct PopoverView: View {
     // MARK: - Actions
 
     private func openSettings() {
-        // The settings window is the next focus target; close the transient menu
-        // bar popover so it does not linger behind or over the settings UI.
         SettingsWindowController.show(settings: env.settings) {
             env.store.refresh()
         }
         closePopover()
+    }
+
+    private func openAnalyticsFolder() {
+        let url = Paths.analyticsFolder(forDatabasePath: env.settings.databasePath)
+        NSWorkspace.shared.open(url)
     }
 
     private func quitApp() {

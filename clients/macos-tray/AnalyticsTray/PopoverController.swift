@@ -16,6 +16,7 @@ final class PopoverController {
 
     private let popover = NSPopover()
     private let environment = AnalyticsEnvironment()
+    private var hostingController: NSHostingController<PopoverView>!
 
     /// Weak reference to the button we're anchored to; used by the event
     /// monitor to distinguish "click on our button" from "click elsewhere".
@@ -25,10 +26,15 @@ final class PopoverController {
     private var eventMonitor: Any?
 
     init() {
-        // Let the hosted SwiftUI view drive the final height. A narrow default
-        // keeps first layout deterministic without imposing the fixed-height
-        // clipping that the custom NSPanel version introduced.
-        popover.contentSize = NSSize(width: 280, height: 320)
+        hostingController = NSHostingController(
+            rootView: PopoverView(environment: environment) { [weak self] in
+                self?.close()
+            }
+        )
+        // Let SwiftUI's intrinsic content size drive the NSPopover height.
+        // The popover should grow/shrink to fit the summary content rather than
+        // forcing a fixed viewport with scroll bars.
+        hostingController.sizingOptions = [.preferredContentSize]
 
         // .applicationDefined: we own open/close logic entirely.
         // .transient would auto-close but causes a double-open quirk when
@@ -39,11 +45,7 @@ final class PopoverController {
         // Embed the SwiftUI view with the long-lived environment. The same
         // environment is also used for startup refreshes before the popover is
         // opened for the first time.
-        popover.contentViewController = NSHostingController(
-            rootView: PopoverView(environment: environment) { [weak self] in
-                self?.close()
-            }
-        )
+        popover.contentViewController = hostingController
     }
 
     // MARK: - Public interface

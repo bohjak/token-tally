@@ -55,7 +55,7 @@ enum AppVersion {
     /// ```
     static func diagnosticBlock(databasePath: String) -> String {
         """
-        pi Analytics Tray — Diagnostic Info
+        ToTally — Diagnostic Info
         Version:  \(versionAndBuild)
         Database: \(Paths.expandingTilde(databasePath))
         macOS:    \(ProcessInfo.processInfo.operatingSystemVersionString)

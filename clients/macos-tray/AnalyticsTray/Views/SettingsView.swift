@@ -1,9 +1,9 @@
 import SwiftUI
 import ServiceManagement
 
-/// Settings UI for pi Analytics.
+/// Settings UI for ToTally.
 ///
-/// All changes take effect immediately — `AppSettings`'s `@Published` `didSet`
+/// All changes take effect immediately - `AppSettings`'s `@Published` `didSet`
 /// observers persist each value to `UserDefaults` and notify `AnalyticsStore`
 /// to restart its refresh timer or reload from the new database path.
 ///
@@ -28,6 +28,9 @@ struct SettingsView: View {
     /// Non-nil when the last launch-at-login toggle attempt failed.
     @State private var launchAtLoginError: String? = nil
 
+    /// Past-7-days messages whose cost is unknown, loaded from the configured database.
+    @State private var unpricedMessages: Int64? = nil
+
     // MARK: - Refresh interval presets
 
     private struct RefreshPreset: Identifiable {
@@ -50,6 +53,7 @@ struct SettingsView: View {
             databaseSection
             refreshSection
             displaySection
+            accountingSection
             startupSection
             resetSection
         }
@@ -57,9 +61,15 @@ struct SettingsView: View {
         // NSHostingController does not always derive a useful intrinsic height
         // for macOS Form content inside an AppKit-created settings window. Use
         // an explicit size so the window does not open as an empty shell.
-        .frame(width: 420, height: 500)
-        .onAppear { validatePath() }
-        .onChange(of: settings.databasePath) { _, _ in validatePath() }
+        .frame(width: 420, height: 540)
+        .onAppear {
+            validatePath()
+            reloadAccountingStatus()
+        }
+        .onChange(of: settings.databasePath) { _, _ in
+            validatePath()
+            reloadAccountingStatus()
+        }
     }
 
     // MARK: - Sections
@@ -73,10 +83,10 @@ struct SettingsView: View {
                     .onSubmit { validatePath() }
                     .truncationMode(.head)
 
-                Button("Browse…") { browseForDatabase() }
+                Button("Browse...") { browseForDatabase() }
             }
 
-            Button("Open Data Source") { openAnalyticsFolder() }
+            Button("Open Analytics Folder") { openAnalyticsFolder() }
 
             // Inline warning, shown only when the path is invalid.
             if !pathIsValid {
@@ -105,7 +115,6 @@ struct SettingsView: View {
                     Text(preset.label).tag(preset.id)
                 }
             }
-            // Inline/menu-style on macOS inside a grouped Form.
 
             Button("Refresh Now") { onRefresh() }
         }
@@ -124,6 +133,41 @@ struct SettingsView: View {
         }
     }
 
+    private var accountingSection: some View {
+        Section {
+            if let count = unpricedMessages {
+                if count > 0 {
+                    Label {
+                        Text(
+                            count == 1
+                                ? "1 message in the past 7 days has unknown cost and is not included in totals."
+                                : "\(count) messages in the past 7 days have unknown cost and are not included in totals."
+                        )
+                    } icon: {
+                        Image(systemName: "info.circle")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Label("All messages in the past 7 days have known costs.", systemImage: "checkmark.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Text("Cost-source status is unavailable for the current database path.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Accounting")
+        } footer: {
+            Text("Messages with unknown cost are excluded from displayed cost totals.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
     private var startupSection: some View {
         Section {
             // Use a manual Binding so we can intercept the set: path, attempt
@@ -138,7 +182,7 @@ struct SettingsView: View {
                 )
             )
 
-            // Error banner — shown only after a failed registration attempt.
+            // Error banner - shown only after a failed registration attempt.
             if let error = launchAtLoginError {
                 Text(error)
                     .font(.caption)
@@ -164,6 +208,7 @@ struct SettingsView: View {
                 settings.resetToDefaults()
                 launchAtLoginError = nil
                 validatePath()
+                reloadAccountingStatus()
             }
         }
     }
@@ -174,6 +219,28 @@ struct SettingsView: View {
         pathIsValid = Paths.fileExists(atPath: settings.databasePath)
     }
 
+    private func reloadAccountingStatus() {
+        guard pathIsValid else {
+            unpricedMessages = nil
+            return
+        }
+
+        let now = Date()
+        let todayStart = Calendar.current.startOfDay(for: now)
+        let weekStart = Calendar.current.date(byAdding: .day, value: -6, to: todayStart) ?? todayStart
+        let weekMillis = AnalyticsQueries.milliseconds(since1970: weekStart)
+
+        do {
+            let bucket = try AnalyticsQueries.usageBucket(
+                databasePath: settings.databasePath,
+                since: weekMillis
+            )
+            unpricedMessages = bucket.unpricedMessages
+        } catch {
+            unpricedMessages = nil
+        }
+    }
+
     // MARK: - File browser
 
     /// Opens a standard Open panel so the user can pick a SQLite .db file.
@@ -182,11 +249,11 @@ struct SettingsView: View {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.message = "Select the pi analytics SQLite database"
+        panel.message = "Select the ToTally analytics SQLite database"
         panel.prompt = "Select"
 
-        // Start the panel in the same directory as the currently configured path
-        // (or the home directory when the path doesn't exist yet).
+        // Start the panel in the directory of the current path (or home dir
+        // when the path does not exist yet).
         let expanded = Paths.expandingTilde(settings.databasePath)
         let parentDir = URL(fileURLWithPath: expanded).deletingLastPathComponent()
         if FileManager.default.fileExists(atPath: parentDir.path) {
@@ -206,8 +273,8 @@ struct SettingsView: View {
     // MARK: - Launch at login
 
     /// Attempts to register or unregister the app as a login item via
-    /// `SMAppService`. On failure the toggle is reverted and an explanatory
-    /// message is shown; the app continues to function normally.
+    /// `SMAppService`. On failure the toggle reverts and a message is shown;
+    /// the app continues to function normally.
     private func attemptSetLaunchAtLogin(_ enable: Bool) {
         do {
             if enable {
@@ -215,9 +282,9 @@ struct SettingsView: View {
             } else {
                 try SMAppService.mainApp.unregister()
             }
-            // Only commit to settings after a successful system registration call.
-            // On failure we never write to settings, so the Toggle's get: returns
-            // the unchanged old value and the toggle reverts automatically.
+            // Only commit to settings after a successful system call. On failure
+            // we never write, so the Toggle's get: returns the unchanged old value
+            // and the control reverts automatically.
             settings.launchAtLogin = enable
             launchAtLoginError = nil
         } catch {
@@ -227,14 +294,10 @@ struct SettingsView: View {
                 underlying: error
             )
             // settings.launchAtLogin is intentionally NOT updated on failure.
-            // SwiftUI re-renders the Toggle with the old settings.launchAtLogin
-            // value (via the Binding's get:), reverting the visual state.
         }
     }
 
     private static func launchAtLoginErrorMessage(action: String, underlying error: Error) -> String {
-        // Surface the underlying error code for diagnostics, plus a plain-language
-        // explanation of the most common cause (unsigned/non-bundled build).
         "Could not \(action) launch at login. " +
         "Make sure the app is installed as a signed bundle in /Applications. " +
         "(\(error.localizedDescription))"

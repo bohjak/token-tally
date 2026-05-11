@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.pi.analytics-tray</string>
+    <string>com.token-tally.ToTally</string>
     <key>CFBundleName</key>
-    <string>AnalyticsTray</string>
+    <string>ToTally</string>
     <key>CFBundleDisplayName</key>
-    <string>pi Analytics Tray</string>
+    <string>ToTally</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>CFBundleShortVersionString</key>

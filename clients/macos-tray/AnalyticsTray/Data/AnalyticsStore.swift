@@ -9,7 +9,7 @@ import Combine
 /// - `.idle` / `.loading` → show last-known data (or a spinner on first load)
 /// - `.loaded` → normal summary + chart
 /// - `.emptyDatabase` → "No usage data yet."
-/// - `.missingDatabase` → "No pi analytics database found."
+/// - `.missingDatabase` → "No ToTally analytics database found."
 /// - `.schemaMismatch` → "Unsupported analytics database schema."
 /// - `.queryError` → compact error text with a Refresh button
 enum StoreState: Equatable {
@@ -61,7 +61,7 @@ final class AnalyticsStore: ObservableObject {
     /// `settings.menuBarDisplayMode`; updated after every state transition.
     ///
     /// `StatusItemController.setTitle(_:)` should observe this property.
-    @Published private(set) var menuBarTitle: String = "π …"
+    @Published private(set) var menuBarTitle: String = "Σ …"
 
     // MARK: Private
 
@@ -152,7 +152,7 @@ final class AnalyticsStore: ObservableObject {
     // MARK: Private — menu bar title
 
     private func updateMenuBarTitle() {
-        // Prefer last-known values so the label never flickers to "π …" during
+        // Prefer last-known values so the label never flickers to "Σ …" during
         // a background refresh.
         if let snapshot = lastSnapshot {
             menuBarTitle = Formatters.menuBarTitle(
@@ -166,14 +166,14 @@ final class AnalyticsStore: ObservableObject {
         // No snapshot yet — show a placeholder appropriate to the current state.
         switch state {
         case .idle, .loading:
-            menuBarTitle = "π …"
+            menuBarTitle = "Σ …"
         case .missingDatabase, .emptyDatabase, .schemaMismatch, .queryError:
             // Error on first load (no previous snapshot to show).
-            menuBarTitle = "π —"
+            menuBarTitle = "Σ —"
         case .loaded:
             // Should not reach here because lastSnapshot is set before .loaded,
             // but handle gracefully.
-            menuBarTitle = "π"
+            menuBarTitle = "Σ"
         }
     }
 

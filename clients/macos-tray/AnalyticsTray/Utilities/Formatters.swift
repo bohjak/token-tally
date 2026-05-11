@@ -1,9 +1,10 @@
 import Foundation
+import AppKit
 
 /// Formatting helpers for costs, token counts, and menu bar labels.
 ///
-/// All functions are pure; no state, no singletons (except the two lazily
-/// created `NumberFormatter`s, which are thread-safe after initialisation).
+/// All functions are pure; no mutable state, no singletons (the two lazily
+/// created formatters are thread-safe after initialisation).
 enum Formatters {
 
     // MARK: - Cost
@@ -24,6 +25,9 @@ enum Formatters {
     // MARK: - Tokens
 
     /// Formats a billable non-cached token count compactly.
+    ///
+    /// Only `input_tokens + output_tokens` should be passed here; cache tokens
+    /// must not be included in the primary display (see UsageBucket comment).
     ///
     /// Examples:
     /// ```
@@ -55,23 +59,27 @@ enum Formatters {
         }
     }
 
-    // MARK: - Menu bar title
+    // MARK: - Menu bar title (plain string)
 
-    /// Builds the string shown in the `NSStatusItem` label.
+    /// Builds the plain string shown in the `NSStatusItem` label.
+    ///
+    /// Uses `Σ` (U+03A3, Greek capital sigma) as the compact glyph representing
+    /// "sum of usage" across all harnesses. This replaces the Pi-specific `π`
+    /// from the original single-harness version.
     ///
     /// Examples:
     /// ```
     /// menuBarTitle(tokens: 284_000, cost: 1.42, mode: .combinedTokensCost)
-    ///     → "π 284k · $1.42"
+    ///     → "Σ 284k · $1.42"
     ///
     /// menuBarTitle(tokens: 284_000, cost: 1.42, mode: .tokensOnly)
-    ///     → "π 284k"
+    ///     → "Σ 284k"
     ///
     /// menuBarTitle(tokens: 284_000, cost: 1.42, mode: .costOnly)
-    ///     → "π $1.42"
+    ///     → "Σ $1.42"
     ///
     /// menuBarTitle(tokens: 284_000, cost: 1.42, mode: .iconOnly)
-    ///     → "π"
+    ///     → "Σ"
     /// ```
     static func menuBarTitle(
         tokens: Int64,
@@ -80,14 +88,43 @@ enum Formatters {
     ) -> String {
         switch mode {
         case .combinedTokensCost:
-            return "π \(formatTokens(tokens)) · \(formatCost(cost))"
+            return "Σ \(formatTokens(tokens)) · \(formatCost(cost))"
         case .tokensOnly:
-            return "π \(formatTokens(tokens))"
+            return "Σ \(formatTokens(tokens))"
         case .costOnly:
-            return "π \(formatCost(cost))"
+            return "Σ \(formatCost(cost))"
         case .iconOnly:
-            return "π"
+            return "Σ"
         }
+    }
+
+    // MARK: - Menu bar attributed title
+
+    /// Builds an `NSAttributedString` for the `NSStatusItem` title.
+    ///
+    /// Applies `NSFont.monospacedDigitSystemFont` to the entire string so all
+    /// digits render at a fixed column width. Without this, the status bar label
+    /// jitters horizontally as digit counts change: "9k" → "10k" widens by one
+    /// proportional digit, causing everything to the right of the label to shift.
+    /// Fixed-width digits eliminate the jitter while keeping the Σ glyph and
+    /// letter characters in the regular system font style.
+    ///
+    /// `NSFont.systemFontSize` matches the standard AppKit control font size
+    /// and looks correct alongside other macOS status bar items.
+    static func menuBarAttributedTitle(
+        tokens: Int64,
+        cost: Double,
+        mode: MenuBarDisplayMode
+    ) -> NSAttributedString {
+        let plain = menuBarTitle(tokens: tokens, cost: cost, mode: mode)
+        // monospacedDigitSystemFont uses the system font with tabular (fixed-width)
+        // number spacing applied. This is equivalent to the font feature pair
+        // kNumberSpacingType / kMonospacedNumbersSelector but more convenient.
+        let font = NSFont.monospacedDigitSystemFont(
+            ofSize: NSFont.systemFontSize,
+            weight: .regular
+        )
+        return NSAttributedString(string: plain, attributes: [.font: font])
     }
 
     // MARK: - Private

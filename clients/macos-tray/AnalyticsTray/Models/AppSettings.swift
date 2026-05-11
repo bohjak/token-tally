@@ -4,13 +4,13 @@ import Foundation
 
 /// Controls what the `NSStatusItem` label shows.
 enum MenuBarDisplayMode: String, CaseIterable, Identifiable {
-    /// "π 284k · $1.42" — tokens and cost (default).
+    /// "Σ 284k · $1.42" — tokens and cost (default).
     case combinedTokensCost
-    /// "π 284k" — tokens only.
+    /// "Σ 284k" — tokens only.
     case tokensOnly
-    /// "π $1.42" — cost only.
+    /// "Σ $1.42" — cost only.
     case costOnly
-    /// "π" — icon only; no numbers.
+    /// "Σ" — icon only; no numbers.
     case iconOnly
 
     var id: String { rawValue }
@@ -28,38 +28,43 @@ enum MenuBarDisplayMode: String, CaseIterable, Identifiable {
 
 // MARK: - AppSettings
 
-/// Persisted user preferences. Backed by `UserDefaults`.
+/// Persisted user preferences for ToTally. Backed by `UserDefaults`.
 ///
-/// This class is `ObservableObject` so SwiftUI views in the Settings UI (T7)
-/// can drive themselves from it. `AnalyticsStore` (T4) reads its values
-/// directly; when the user changes `databasePath` or `refreshInterval` the
-/// store should be notified to cancel and restart the refresh cycle.
+/// All keys are namespaced under `"com.token-tally."` to avoid collisions
+/// with other apps that share the default `UserDefaults` suite.
 ///
-/// All keys are namespaced under `"com.pi.analyticstray."` to avoid collisions
-/// with other apps that share the same default `UserDefaults` suite.
+/// `AnalyticsStore` reads `databasePath`, `refreshInterval`, and
+/// `menuBarDisplayMode` directly. Changing `databasePath` or `refreshInterval`
+/// triggers a store restart.
 final class AppSettings: ObservableObject {
 
     // MARK: UserDefaults keys
 
     private enum Key {
-        static let databasePath      = "com.pi.analyticstray.databasePath"
-        static let refreshInterval   = "com.pi.analyticstray.refreshInterval"
-        static let menuBarDisplayMode = "com.pi.analyticstray.menuBarDisplayMode"
-        static let launchAtLogin     = "com.pi.analyticstray.launchAtLogin"
+        static let databasePath       = "com.token-tally.databasePath"
+        static let refreshInterval    = "com.token-tally.refreshInterval"
+        static let menuBarDisplayMode = "com.token-tally.menuBarDisplayMode"
+        static let launchAtLogin      = "com.token-tally.launchAtLogin"
     }
 
     // MARK: Defaults
 
-    /// The path as stored in defaults (may contain `~`).
-    static let defaultDatabasePath = "~/.pi/analytics/events.db"
+    /// Central ToTally database path, XDG-aware (honors `$XDG_DATA_HOME`).
+    /// Computed so it reflects the runtime environment, not a build-time constant.
+    static var defaultDatabasePath: String { AnalyticsQueries.defaultDatabasePath() }
+
     static let defaultRefreshInterval: TimeInterval = 60
     static let defaultMenuBarDisplayMode: MenuBarDisplayMode = .combinedTokensCost
-    static let defaultLaunchAtLogin = false
+
+    /// Launch at login is enabled by default — ToTally is only useful as a
+    /// persistent menu bar presence and has no value if it doesn't auto-start.
+    /// Users can disable it from Settings.
+    static let defaultLaunchAtLogin = true
 
     // MARK: Published properties
 
     /// Path to the SQLite database (tilde-containing paths are accepted).
-    /// Changing this should trigger a store refresh; T4 / T7 handle that.
+    /// Changing this triggers a store refresh via the AnalyticsStore subscriber.
     @Published var databasePath: String {
         didSet { UserDefaults.standard.set(databasePath, forKey: Key.databasePath) }
     }
@@ -105,6 +110,10 @@ final class AppSettings: ObservableObject {
         launchAtLogin = UserDefaults.standard.object(forKey: Key.launchAtLogin) != nil
             ? UserDefaults.standard.bool(forKey: Key.launchAtLogin)
             : AppSettings.defaultLaunchAtLogin
+
+        // Remove the retired harness filter preference so old installations do
+        // not keep stale settings that no longer have UI.
+        UserDefaults.standard.removeObject(forKey: "com.token-tally.enabledHarnesses")
     }
 
     // MARK: Reset
@@ -115,6 +124,7 @@ final class AppSettings: ObservableObject {
          Key.menuBarDisplayMode, Key.launchAtLogin].forEach {
             UserDefaults.standard.removeObject(forKey: $0)
         }
+        UserDefaults.standard.removeObject(forKey: "com.token-tally.enabledHarnesses")
         databasePath = AppSettings.defaultDatabasePath
         refreshInterval = AppSettings.defaultRefreshInterval
         menuBarDisplayMode = AppSettings.defaultMenuBarDisplayMode

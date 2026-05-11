@@ -89,38 +89,41 @@ struct FormatTokensTests {
 @Suite("Formatters.menuBarTitle")
 struct MenuBarTitleTests {
 
+    // ToTally uses Σ (U+03A3, Greek capital sigma) to represent "sum of usage"
+    // across all harnesses. All menu bar title tests must use Σ, not π.
+
     @Test func combined() {
         #expect(
             Formatters.menuBarTitle(tokens: 284_000, cost: 1.42, mode: .combinedTokensCost)
-            == "π 284k · $1.42"
+            == "Σ 284k · $1.42"
         )
     }
 
     @Test func tokensOnly() {
         #expect(
             Formatters.menuBarTitle(tokens: 284_000, cost: 1.42, mode: .tokensOnly)
-            == "π 284k"
+            == "Σ 284k"
         )
     }
 
     @Test func costOnly() {
         #expect(
             Formatters.menuBarTitle(tokens: 284_000, cost: 1.42, mode: .costOnly)
-            == "π $1.42"
+            == "Σ $1.42"
         )
     }
 
     @Test func iconOnly() {
         #expect(
             Formatters.menuBarTitle(tokens: 284_000, cost: 1.42, mode: .iconOnly)
-            == "π"
+            == "Σ"
         )
     }
 
     @Test func combined_zeroData() {
         #expect(
             Formatters.menuBarTitle(tokens: 0, cost: 0, mode: .combinedTokensCost)
-            == "π 0 · $0.00"
+            == "Σ 0 · $0.00"
         )
     }
 }
@@ -131,19 +134,22 @@ struct MenuBarTitleTests {
 struct PathsTests {
 
     @Test func expandTilde() {
-        let expanded = Paths.expandingTilde("~/.pi/analytics/events.db")
+        let expanded = Paths.expandingTilde("~/.local/share/token-tally/events.db")
         #expect(!expanded.hasPrefix("~"))
-        #expect(expanded.hasSuffix("/.pi/analytics/events.db"))
+        #expect(expanded.hasSuffix("/.local/share/token-tally/events.db"))
     }
 
     @Test func alreadyAbsolute() {
-        let path = "/Users/test/.pi/analytics/events.db"
+        let path = "/Users/test/.local/share/token-tally/events.db"
         #expect(Paths.expandingTilde(path) == path)
     }
 
     @Test func analyticsFolder_isParentDirectory() {
-        let folder = Paths.analyticsFolder(forDatabasePath: "~/.pi/analytics/events.db")
-        #expect(folder.path.hasSuffix("/.pi/analytics"))
+        // analyticsFolder returns the directory containing the DB file.
+        let folder = Paths.analyticsFolder(
+            forDatabasePath: "~/.local/share/token-tally/events.db"
+        )
+        #expect(folder.path.hasSuffix("/.local/share/token-tally"))
     }
 }
 
