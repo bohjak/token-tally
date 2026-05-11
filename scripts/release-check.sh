@@ -96,6 +96,13 @@ run_check() {
 check_typecheck() {
   section "TypeScript typecheck"
 
+  # Build store declarations first. Fresh CI checkouts do not have store/dist,
+  # and workspace consumers resolve @token-tally/store through package exports.
+  if ! (cd "${REPO_ROOT}" && pnpm --filter @token-tally/store build 2>&1); then
+    fail "store: build failed — cannot typecheck workspace consumers"
+    return
+  fi
+
   # Typecheck every workspace package that has a tsconfig.
   local packages=(
     "store"

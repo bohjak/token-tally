@@ -22,6 +22,14 @@ jobs:
           node-version: '24'
           cache: 'pnpm'
 
+      - name: Select Xcode 16
+        run: |
+          set -euo pipefail
+          xcode_path="$(ls -d /Applications/Xcode_16*.app | sort | tail -n 1)"
+          sudo xcode-select -s "${xcode_path}"
+          xcodebuild -version
+          swift --version
+
       - name: Install JS dependencies
         run: pnpm install --frozen-lockfile
 
