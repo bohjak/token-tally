@@ -172,7 +172,7 @@ export function withBusyRetry<T>(fn: () => T, maxTotalMs = 10_000): T {
       const sleep = Math.min(delayMs, remaining, 1_000);
 
       // Atomics.wait is the only synchronous sleep available in Node.js.
-      // It works in the main thread on Node 20+ (the minimum required version).
+      // It works in the main thread on Node 24+ (the minimum required version).
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, sleep);
       delayMs = Math.min(delayMs * 2, 1_000);
     }

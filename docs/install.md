@@ -11,7 +11,7 @@ ToTally. For the quick-start, see the [README](../README.md).
 |---|---|---|
 | macOS | 14 or later | — |
 | Command Line Tools / Xcode | current | `xcode-select --install` |
-| Node.js | ≥ 20 | `n lts` or [nodejs.org](https://nodejs.org) |
+| Node.js | ≥ 24 | `n lts` or [nodejs.org](https://nodejs.org) |
 | pnpm | any | `npm install -g pnpm` |
 | SQLite | bundled with macOS | — |
 

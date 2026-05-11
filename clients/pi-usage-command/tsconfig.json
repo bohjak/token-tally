@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    // Target modern Node.js (≥20) that Pi uses.
+    // Target modern Node.js (≥24) that Pi uses.
     "target": "ES2022",
     "module": "esnext",
     // bundler resolution: lets TypeScript resolve .ts extension imports and

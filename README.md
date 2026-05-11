@@ -51,7 +51,7 @@ database, rebuilds the app, and updates extension symlinks automatically.
 - **macOS 14 or later**
 - **Command Line Tools for Xcode** (or full Xcode) — for the Swift build
   - Full Xcode is required to run Swift tests (`make test`)
-- **Node.js ≥ 20** — for the store CLI
+- **Node.js ≥ 24** — for the store CLI
 - **pnpm** — installed automatically if absent (`npm install -g pnpm`); the
   global binary lands wherever pnpm puts it on your system (typically
   `~/.local/share/pnpm/` or `~/.pnpm/` depending on your setup)

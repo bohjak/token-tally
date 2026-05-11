@@ -13,7 +13,7 @@
     "url": "https://github.com/bohjak/token-tally/issues"
   },
   "engines": {
-    "node": ">=20.0.0",
+    "node": ">=24.0.0",
     "pnpm": ">=9.0.0"
   },
   "devDependencies": {

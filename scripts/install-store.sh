@@ -40,7 +40,7 @@ main() {
 
   # ---- Verify Node and pnpm are available ----
   if ! command -v node &>/dev/null; then
-    err "node not found. Install Node.js >= 20 to continue."
+    err "node not found. Install Node.js >= 24 to continue."
     err "  See: https://nodejs.org or use 'n' (n lts)"
     return 1
   fi
@@ -52,8 +52,8 @@ main() {
 
   local node_major
   node_major=$(node -e "process.stdout.write(process.version.replace(/^v/,'').split('.')[0])")
-  if (( node_major < 20 )); then
-    err "Node.js >= 20 required; found v${node_major}. Use 'n lts' to upgrade."
+  if (( node_major < 24 )); then
+    err "Node.js >= 24 required; found v${node_major}. Use 'n lts' to upgrade."
     return 1
   fi
 
