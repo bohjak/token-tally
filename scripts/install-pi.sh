@@ -75,8 +75,8 @@ main() {
   # If the Pi extensions directory doesn't exist, Pi is not installed.
   if [[ ! -d "${pi_ext_dir}" ]]; then
     warn "Pi extensions directory not found (${pi_ext_dir})"
-    warn "Install Pi first: https://pi.ai/docs or similar"
-    warn "Re-run 'make install' after Pi is installed."
+    warn "Install Pi first, then re-run 'make install'."
+    warn "Pi must be installed and have created ~/.pi/agent/extensions/ before this step."
     return 1
   fi
 

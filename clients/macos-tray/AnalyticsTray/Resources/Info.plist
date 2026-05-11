@@ -17,7 +17,7 @@
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <key>LSMinimumSystemVersion</key>
-    <string>13.0</string>
+    <string>14.0</string>
 
     <!-- Suppress Dock icon and application menu when run as a .app bundle. -->
     <!-- The programmatic setActivationPolicy(.accessory) call in              -->

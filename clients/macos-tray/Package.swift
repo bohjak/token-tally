@@ -29,6 +29,16 @@ let package = Package(
             dependencies: ["AnalyticsTray"],
             path: "AnalyticsTrayTests",
             exclude: ["Fixtures"],
+            // The Swift Testing framework ships with the Command Line Tools at
+            // /Library/Developer/CommandLineTools/Library/Developer/Frameworks/Testing.framework.
+            // The unsafeFlags below make `import Testing` available at compile time on
+            // CLT-only systems where Testing is not on the default search path.
+            //
+            // IMPORTANT — Running the tests still requires the `xctest` runner, which
+            // is only available with a full Xcode installation.  On CLT-only systems
+            // `swift test` builds successfully but silently runs 0 tests and exits 0.
+            // The `test` targets in both Makefiles guard against this by checking
+            // `xcrun --find xctest` and aborting with a clear error when Xcode is absent.
             swiftSettings: [
                 .unsafeFlags(["-F", "/Library/Developer/CommandLineTools/Library/Developer/Frameworks"])
             ],

@@ -3,6 +3,13 @@
   "version": "0.1.0",
   "description": "Pi harness writer extension for ToTally — captures sessions, turns, LLM messages, and tool calls into the central store.",
   "type": "module",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bohjak/token-tally.git",
+    "directory": "harnesses/pi/writer-extension"
+  },
   "pi": {
     "extensions": ["./src/index.ts"]
   },

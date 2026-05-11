@@ -1,9 +1,8 @@
 # ToTally
 
 A local analytics platform for coding-agent harnesses. ToTally collects token
-usage and cost data from agents like [Pi](https://github.com/j-bohacek/pi) into
-a central SQLite database on your machine and shows a glanceable summary in the
-macOS menu bar.
+usage and cost data from agents into a central SQLite database on your machine
+and shows a glanceable summary in the macOS menu bar.
 
 ```
 Σ 284k · $1.42
@@ -16,7 +15,7 @@ macOS menu bar.
 ## Quick start
 
 ```sh
-git clone https://github.com/<owner>/token-tally
+git clone https://github.com/bohjak/token-tally
 cd token-tally
 make install
 ```
@@ -24,11 +23,16 @@ make install
 `make install` builds and installs everything:
 
 - creates the central database at `~/.local/share/token-tally/events.db`
-- builds and installs `/Applications/ToTally.app`, then launches it
+- builds and installs `/Applications/ToTally.app`, restarting it if already running
 - registers the app as a login item (enabled by default; change in Settings)
-- installs the Pi writer and usage-command extensions
+- installs the Pi writer and usage-command extensions (if Pi is present)
 
 Run `make doctor` to confirm everything is healthy.
+
+> **Gatekeeper note:** ToTally.app is not signed with an Apple Developer
+> certificate. On first launch macOS may block it. To allow it, open
+> **System Settings → Privacy & Security**, scroll to the "Security" section,
+> and click **Open Anyway** next to the ToTally entry.
 
 ### Updating
 
@@ -44,10 +48,13 @@ database, rebuilds the app, and updates extension symlinks automatically.
 
 ## Requirements
 
-- **macOS 13 or later**
+- **macOS 14 or later**
 - **Command Line Tools for Xcode** (or full Xcode) — for the Swift build
+  - Full Xcode is required to run Swift tests (`make test`)
 - **Node.js ≥ 20** — for the store CLI
-- **pnpm** — installed by `npm install -g pnpm` if absent
+- **pnpm** — installed automatically if absent (`npm install -g pnpm`); the
+  global binary lands wherever pnpm puts it on your system (typically
+  `~/.local/share/pnpm/` or `~/.pnpm/` depending on your setup)
 
 The installer checks for these and prints a clear error if anything is missing.
 
@@ -61,11 +68,16 @@ The installer checks for these and prints a clear error if anything is missing.
 | Tray app | `/Applications/ToTally.app` |
 | Pi writer extension | `~/.pi/agent/extensions/token-tally-writer` → `<repo>/harnesses/pi/writer-extension` |
 | Pi usage client | `~/.pi/agent/extensions/token-tally-usage` → `<repo>/clients/pi-usage-command` |
-| CLI binary | `~/.local/share/pnpm/token-tally` (via pnpm global link) |
+| CLI binary | wherever pnpm places global binaries on your system |
 | Install manifest | `~/.config/token-tally/install.json` |
 
 All extension paths are symlinks back to the repo, so `git pull && make install`
 picks up code changes without reinstalling.
+
+> **Pi is optional.** The tray app and CLI work without Pi. The Pi extensions
+> (writer and usage command) are only installed if `~/.pi` exists. See
+> [`docs/plugin-authoring.md`](docs/plugin-authoring.md) to integrate a
+> different harness.
 
 ---
 
@@ -92,8 +104,8 @@ token-tally import legacy-pi
 ```
 
 The import is idempotent — running it more than once is safe. It maps the old
-schema to the central ToTally schema and records import metadata so `make doctor`
-can surface the status. The legacy file is left in place after import.
+schema to the central ToTally schema and records import metadata for diagnostics.
+The legacy file is left in place after import.
 
 This command is **never run automatically by the installer**. It is an explicit
 user action.
@@ -111,7 +123,9 @@ flags.
 **Never stored:** prompts, assistant responses, tool arguments, tool outputs,
 file contents, environment variables, secrets.
 
-See [`docs/local-data.md`](docs/local-data.md) for the complete data model.
+See [`docs/local-data.md`](docs/local-data.md) for the complete data model and
+[`docs/schema.md`](docs/schema.md) for the database schema and versioning
+reference.
 
 ---
 
@@ -156,7 +170,7 @@ token-tally/
     pi-usage-command/         ← Pi /usage and /analytics doctor commands
 
   docs/
-    schema.md                 ← database schema reference
+    schema.md                 ← database schema and versioning reference
     local-data.md             ← what data is and isn't stored
     install.md                ← detailed install/uninstall reference
     plugin-authoring.md       ← guide for writing new harness integrations
@@ -170,3 +184,9 @@ Claude Code, OpenCode, Cursor, and other harnesses are planned for future
 releases. The central store is designed for multi-harness use from day one.
 See [`docs/plugin-authoring.md`](docs/plugin-authoring.md) to write an
 integration for a new harness.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).

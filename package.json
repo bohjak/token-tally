@@ -3,6 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "description": "ToTally — local analytics platform for coding-agent harnesses",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bohjak/token-tally.git"
+  },
+  "homepage": "https://github.com/bohjak/token-tally#readme",
+  "bugs": {
+    "url": "https://github.com/bohjak/token-tally/issues"
+  },
   "engines": {
     "node": ">=20.0.0",
     "pnpm": ">=9.0.0"

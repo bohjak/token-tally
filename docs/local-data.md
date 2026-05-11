@@ -29,7 +29,7 @@ and readable only by processes on this machine with access to the file.
 | Token counts | input tokens, output tokens, cache read tokens, cache write tokens |
 | Cost values | per-message cost breakdown and total in integer micros |
 | Event IDs | session ID, turn ID, message ID, tool call ID |
-| Repo / cwd metadata | working directory, repo owner, repo name, remote URL |
+| Repo / cwd metadata | working directory, repo owner, repo name, remote URL (credentials stripped — see below) |
 | Tool names | name of tool invoked (e.g. `bash`, `read`, `edit`) |
 | Error flags | whether a tool call ended in an error |
 | Subscription periods | plan name, period dates, fixed fee, quota usage |
@@ -98,6 +98,29 @@ distinct numbers per period:
 Sessions can span subscription period boundaries. Readers must group
 `llm_messages` by `subscription_id`, not by `session_id`, when computing
 per-period totals.
+
+---
+
+## Repo remote URL sanitisation
+
+Git remote URLs are sometimes configured with embedded credentials, for example
+when a CI system uses HTTPS with a token:
+
+```text
+https://oauth2:ghp_mytoken@github.com/owner/repo.git
+```
+
+ToTally **strips the userinfo (`user:password@`) portion from HTTP and HTTPS
+remote URLs before writing `repo_remote` to the database**. The stored value
+retains only the scheme, host, path, and optional `.git` suffix:
+
+```text
+https://github.com/owner/repo.git
+```
+
+This sanitisation is applied both by the live writer (via `AnalyticsWriter.recordSession`)
+and by the legacy Pi importer. SSH remotes (e.g. `git@github.com:owner/repo.git`)
+are stored as-is because SSH does not embed passwords in the URL.
 
 ---
 

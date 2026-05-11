@@ -5,7 +5,7 @@
 #   1. Build the Swift tray app in release configuration.
 #   2. Assemble the app bundle as ToTally.app under clients/macos-tray/dist/.
 #   3. Atomically install the bundle to /Applications/ToTally.app.
-#   4. Quit any running instance first so the binary can be replaced.
+#   4. Stop any running instance first so the binary can be replaced.
 #   5. Launch the newly-installed app (which self-registers for launch-at-login
 #      on first run because AppSettings.defaultLaunchAtLogin = true).
 #
@@ -24,6 +24,8 @@
 set -euo pipefail
 
 BUNDLE_NAME="ToTally.app"
+APP_NAME="ToTally"
+BUNDLE_ID="com.token-tally.ToTally"
 INSTALL_DIR="/Applications"
 
 if [[ -t 1 ]]; then
@@ -89,9 +91,16 @@ atomic_install() {
   local bundle_dir="$1"
 
   if [[ ! -w "${INSTALL_DIR}" ]]; then
-    err "/Applications is not writable."
-    err "Re-run with elevated permissions or grant write access:"
-    err "  sudo make install"
+    err "/Applications is not writable by the current user."
+    err "Do NOT run 'sudo make install' — that runs the entire build chain as root."
+    err ""
+    err "Option A — admin-copy only the already-built bundle (preferred):"
+    err "    sudo cp -R '${bundle_dir}' /Applications/ToTally.app"
+    err ""
+    err "Option B — install manually from Finder:"
+    err "    open '${bundle_dir%/*}'"
+    err "    then drag ToTally.app into /Applications when prompted."
+    err ""
     err "(ToTally does NOT silently fall back to ~/Applications.)"
     return 1
   fi
@@ -106,20 +115,70 @@ atomic_install() {
   info "Installed ${INSTALL_DIR}/${BUNDLE_NAME}"
 }
 
-# Quit a running instance of ToTally so the binary can be replaced.
-# Uses AppleScript; no-op if the app is not running or osascript is absent.
-quit_if_running() {
-  if ! command -v osascript &>/dev/null; then return; fi
-  local running
-  running=$(osascript -e \
-    'tell application "System Events" to (name of processes) contains "ToTally"' \
-    2>/dev/null) || running="false"
-  if [[ "${running}" == "true" ]]; then
-    echo "  Quitting running ToTally instance…"
-    osascript -e 'tell application "ToTally" to quit' 2>/dev/null || true
-    # Brief pause for the process to exit before we overwrite the binary.
-    sleep 1
+# Return success when a ToTally process is currently running.
+is_app_running() {
+  if command -v pgrep &>/dev/null; then
+    pgrep -x "${APP_NAME}" >/dev/null 2>&1
+    return
   fi
+
+  if command -v osascript &>/dev/null; then
+    local running
+    running=$(osascript -e \
+      "tell application \"System Events\" to (name of processes) contains \"${APP_NAME}\"" \
+      2>/dev/null) || running="false"
+    [[ "${running}" == "true" ]]
+    return
+  fi
+
+  return 1
+}
+
+# Wait up to ~5 seconds for ToTally to exit.
+wait_for_app_exit() {
+  local _
+  for _ in {1..20}; do
+    if ! is_app_running; then
+      return 0
+    fi
+    sleep 0.25
+  done
+
+  return 1
+}
+
+# Stop a running instance of ToTally so the binary can be replaced. Prefer a
+# graceful quit first, then force-kill if the menu bar app does not exit.
+stop_if_running() {
+  if ! is_app_running; then
+    return 0
+  fi
+
+  echo "  Stopping running ToTally instance…"
+
+  if command -v osascript &>/dev/null; then
+    osascript -e "tell application id \"${BUNDLE_ID}\" to quit" 2>/dev/null || \
+      osascript -e "tell application \"${APP_NAME}\" to quit" 2>/dev/null || \
+      true
+  fi
+
+  if wait_for_app_exit; then
+    info "Stopped running ToTally"
+    return 0
+  fi
+
+  warn "ToTally did not quit; killing it…"
+  if command -v pkill &>/dev/null; then
+    pkill -x "${APP_NAME}" 2>/dev/null || true
+  fi
+
+  if wait_for_app_exit; then
+    info "Killed running ToTally"
+    return 0
+  fi
+
+  err "Could not stop running ToTally; aborting install to avoid replacing a live app."
+  return 1
 }
 
 # Launch the freshly-installed app.
@@ -127,7 +186,7 @@ quit_if_running() {
 # itself as a login item on first launch via SMAppService.
 launch_app() {
   echo "  Launching ToTally…"
-  open -a "${INSTALL_DIR}/${BUNDLE_NAME}" 2>/dev/null && \
+  open "${INSTALL_DIR}/${BUNDLE_NAME}" 2>/dev/null && \
     info "ToTally launched" || \
     warn "Could not launch ToTally automatically — open it from /Applications"
 }
@@ -146,7 +205,7 @@ main() {
   fi
 
   build_bundle "${tray_dir}"
-  quit_if_running
+  stop_if_running
   atomic_install "${tray_dir}/dist/${BUNDLE_NAME}"
   launch_app
 }

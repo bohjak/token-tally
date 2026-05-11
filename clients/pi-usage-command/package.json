@@ -4,6 +4,12 @@
   "description": "Pi usage command client — /usage and /analytics doctor reading from the ToTally central store",
   "type": "module",
   "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bohjak/token-tally.git",
+    "directory": "clients/pi-usage-command"
+  },
   "pi": {
     "extensions": ["./index.ts"]
   },

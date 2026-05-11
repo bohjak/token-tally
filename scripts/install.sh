@@ -60,10 +60,11 @@ MANIFEST_PATH="${TOKEN_TALLY_CONFIG_DIR}/install.json"
 read_installed_at() {
   local ts
   if [[ -f "${MANIFEST_PATH}" ]] && command -v python3 &>/dev/null; then
-    ts=$(python3 -c \
-      "import json,sys; d=json.load(open('${MANIFEST_PATH}')); print(d.get('installedAt',''))" \
+    # Pass the path via env to avoid shell interpolation into Python source.
+    ts=$(TT_MANIFEST_PATH="${MANIFEST_PATH}" python3 -c \
+      "import json,os; d=json.load(open(os.environ['TT_MANIFEST_PATH'])); print(d.get('installedAt',''))" \
       2>/dev/null) || ts=""
-    if [[ -n "${ts}" ]]; then
+    if [[ "${ts}" =~ ^[0-9]+$ ]]; then
       echo "${ts}"
       return
     fi
@@ -84,44 +85,62 @@ write_manifest() {
   local pi_writer_path="$9"
   local pi_usage_path="${10}"
 
-  # Convert bash true/false → Python True/False for use inside the heredoc.
-  local py_store_ok py_tray_ok py_pi_ok
-  [[ "${store_ok}" == "true" ]] && py_store_ok="True" || py_store_ok="False"
-  [[ "${tray_ok}"  == "true" ]] && py_tray_ok="True"  || py_tray_ok="False"
-  [[ "${pi_ok}"    == "true" ]] && py_pi_ok="True"    || py_pi_ok="False"
-
-  python3 - <<PY
+  # All values are passed via the environment so that paths with special
+  # characters or spaces never get interpolated into Python source code.
+  # The heredoc uses a quoted delimiter (<<'PY') to prevent any shell
+  # expansion inside the Python script.
+  TT_MANIFEST_PATH="${MANIFEST_PATH}" \
+  TT_REPO_ROOT="${REPO_ROOT}" \
+  TT_INSTALLED_AT="${installed_at}" \
+  TT_UPDATED_AT="${updated_at}" \
+  TT_STORE_OK="${store_ok}" \
+  TT_STORE_DB_PATH="${store_db_path}" \
+  TT_STORE_SCHEMA_VER="${store_schema_ver}" \
+  TT_TRAY_OK="${tray_ok}" \
+  TT_TRAY_VERSION="${tray_version}" \
+  TT_PI_OK="${pi_ok}" \
+  TT_PI_WRITER_PATH="${pi_writer_path}" \
+  TT_PI_USAGE_PATH="${pi_usage_path}" \
+  python3 - <<'PY'
 import json, os
 
-if ${py_pi_ok}:
-    pi_block = {
+def e(k): return os.environ[k]
+def b(k): return e(k) == "true"
+
+schema_raw = e("TT_STORE_SCHEMA_VER")
+schema_ver = int(schema_raw) if schema_raw.isdigit() else 0
+
+pi_block = (
+    {
         "installed": True,
-        "writerExtensionPath": "${pi_writer_path}",
-        "usageCommandPath":    "${pi_usage_path}",
+        "writerExtensionPath": e("TT_PI_WRITER_PATH"),
+        "usageCommandPath":    e("TT_PI_USAGE_PATH"),
     }
-else:
-    pi_block = {"installed": False, "reason": "Pi not detected or install failed"}
+    if b("TT_PI_OK")
+    else {"installed": False, "reason": "Pi not detected or install failed"}
+)
 
 data = {
-    "repoPath":    "${REPO_ROOT}",
-    "installedAt": ${installed_at},
-    "updatedAt":   ${updated_at},
+    "repoPath":    e("TT_REPO_ROOT"),
+    "installedAt": int(e("TT_INSTALLED_AT")),
+    "updatedAt":   int(e("TT_UPDATED_AT")),
     "components": {
         "store": {
-            "installed":     ${py_store_ok},
-            "databasePath":  "${store_db_path}",
-            "schemaVersion": ${store_schema_ver},
+            "installed":     b("TT_STORE_OK"),
+            "databasePath":  e("TT_STORE_DB_PATH"),
+            "schemaVersion": schema_ver,
         },
         "tray": {
-            "installed": ${py_tray_ok},
+            "installed": b("TT_TRAY_OK"),
             "path":      "/Applications/ToTally.app",
-            "version":   "${tray_version}",
+            "version":   e("TT_TRAY_VERSION"),
         },
         "pi": pi_block,
     },
 }
-os.makedirs(os.path.dirname("${MANIFEST_PATH}"), exist_ok=True)
-with open("${MANIFEST_PATH}", "w") as f:
+manifest_path = e("TT_MANIFEST_PATH")
+os.makedirs(os.path.dirname(manifest_path), exist_ok=True)
+with open(manifest_path, "w") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
 PY
@@ -217,14 +236,6 @@ main() {
   echo -e "  pi      ${pi_label}"
   echo
 
-  # Hint about legacy Pi data import (never run automatically).
-  if [[ -f "${HOME}/.pi/analytics/events.db" ]]; then
-    echo -e "  ${YELLOW}Note:${RESET} Legacy Pi analytics data found at:"
-    echo    "    ~/.pi/analytics/events.db"
-    echo    "  To import it into the central store, run:"
-    echo    "    token-tally import legacy-pi"
-    echo
-  fi
 
   if [[ "${store_ok}" == "true" ]]; then
     echo -e "  ${GREEN}ToTally installed successfully.${RESET}"

@@ -7,7 +7,9 @@
 #   3. Pi extensions:   ~/.pi/agent/extensions/token-tally-{writer,usage} point
 #                       to the correct repo paths.
 #   4. Install manifest: present and parseable.
-#   5. Legacy Pi data:  report if it exists (for the user to import if wanted).
+#
+# Legacy Pi data is not checked here; use 'token-tally import legacy-pi'
+# to migrate it into the central store.
 #
 # Exit codes:
 #   0   all checks pass
@@ -51,14 +53,16 @@ check_store_cli() {
   section "Store CLI"
 
   # 1a. Binary reachable?
-  local cli_bin
+  # Use an array so that a node-path fallback with a space in it is never
+  # subject to unquoted word splitting when the command is invoked.
+  local -a cli_cmd
   if command -v token-tally &>/dev/null; then
-    cli_bin=$(command -v token-tally)
-    pass "token-tally found at ${cli_bin}"
+    cli_cmd=(token-tally)
+    pass "token-tally found at $(command -v token-tally)"
   else
     # Try via node directly as a fallback (e.g. PATH not yet updated).
     if [[ -f "${REPO_ROOT}/store/bin/token-tally.js" ]] && command -v node &>/dev/null; then
-      cli_bin="node ${REPO_ROOT}/store/bin/token-tally.js"
+      cli_cmd=(node "${REPO_ROOT}/store/bin/token-tally.js")
       warn "token-tally not in PATH; falling back to node invocation"
       warn "Add '$(pnpm bin -g 2>/dev/null || echo "pnpm global bin")' to PATH"
     else
@@ -69,7 +73,7 @@ check_store_cli() {
 
   # 1b. Run token-tally doctor against the default DB.
   local doctor_output doctor_status
-  doctor_output=$(${cli_bin} doctor --json 2>/dev/null) || true
+  doctor_output=$("${cli_cmd[@]}" doctor --json 2>/dev/null) || true
   doctor_status=$(echo "${doctor_output}" | \
     python3 -c "import json,sys; print(json.load(sys.stdin).get('status','error'))" \
     2>/dev/null) || doctor_status="error"
@@ -150,8 +154,9 @@ check_manifest() {
   fi
 
   local repo_path
-  repo_path=$(python3 -c \
-    "import json; d=json.load(open('${MANIFEST_PATH}')); print(d.get('repoPath',''))" \
+  # Pass the path via env to avoid interpolating it into Python source code.
+  repo_path=$(TT_MANIFEST_PATH="${MANIFEST_PATH}" python3 -c \
+    "import json,os; d=json.load(open(os.environ['TT_MANIFEST_PATH'])); print(d.get('repoPath',''))" \
     2>/dev/null) || repo_path=""
 
   if [[ -z "${repo_path}" ]]; then
@@ -164,20 +169,6 @@ check_manifest() {
   fi
 }
 
-check_legacy_pi_data() {
-  section "Legacy Pi data"
-  local legacy_db="${HOME}/.pi/analytics/events.db"
-  if [[ -f "${legacy_db}" ]]; then
-    local size
-    size=$(du -sh "${legacy_db}" 2>/dev/null | cut -f1) || size="?"
-    warn "Legacy Pi analytics DB found (${size}): ${legacy_db}"
-    warn "To import into the central store, run:"
-    warn "  token-tally import legacy-pi"
-    warn "(This is optional and never runs automatically.)"
-  else
-    pass "No legacy Pi analytics DB found"
-  fi
-}
 
 # ---------------------------------------------------------------------------
 # Main
@@ -191,7 +182,6 @@ main() {
   check_tray
   check_pi_extensions
   check_manifest
-  check_legacy_pi_data
 
   # Summary
   section "Result"

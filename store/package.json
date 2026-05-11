@@ -3,6 +3,16 @@
   "version": "0.1.0",
   "description": "Central store writer library and CLI for ToTally",
   "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bohjak/token-tally.git",
+    "directory": "store"
+  },
+  "homepage": "https://github.com/bohjak/token-tally#readme",
+  "bugs": {
+    "url": "https://github.com/bohjak/token-tally/issues"
+  },
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",
   "exports": {

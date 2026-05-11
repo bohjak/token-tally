@@ -233,6 +233,110 @@ describe("legacy Pi import", () => {
     );
   });
 
+  test("importer does not overwrite existing live harness version/integration_version", async () => {
+    const legacyPath = join(tmp.dir, "legacy-harness-guard.db");
+    const centralPath = join(tmp.dir, "central-harness-guard.db");
+    makeLegacyDb(legacyPath);
+
+    // Simulate the live Pi writer extension having already registered the
+    // harness with its real version before the importer runs.
+    const { AnalyticsWriter } = require("../dist/src/index");
+    const preWriter = await AnalyticsWriter.open({
+      dbPath: centralPath,
+      spoolDir: join(tmp.dir, "harness-guard-spool"),
+      harnessName: "pi",
+    });
+    await preWriter.recordHarness({
+      name: "pi",
+      displayName: "Pi",
+      version: "2.5.0",
+      integrationVersion: "0.3.0",
+    });
+    await preWriter.close();
+
+    // Now run the legacy importer.
+    await importLegacyPi({ sourcePath: legacyPath, dbPath: centralPath });
+
+    // The harness row must still carry the live writer's values, NOT the
+    // importer's sentinel values ("1.0.0" / "legacy-import-0.1.0").
+    const db = openDb(centralPath);
+    const row = /** @type {{ version: string; integration_version: string }} */ (
+      db.prepare("SELECT version, integration_version FROM harnesses WHERE name='pi'").get()
+    );
+    db.close();
+
+    assert.equal(
+      row.version,
+      "2.5.0",
+      "importer must not overwrite live harness version"
+    );
+    assert.equal(
+      row.integration_version,
+      "0.3.0",
+      "importer must not overwrite live integration_version"
+    );
+  });
+
+  test("repo_remote credentials are redacted during legacy import", async () => {
+    const legacyPath = join(tmp.dir, "legacy-remote-redact.db");
+    const centralPath = join(tmp.dir, "central-remote-redact.db");
+
+    // Build a legacy DB with a credentialed repo_remote.
+    const Database = require("better-sqlite3");
+    const db = new Database(legacyPath);
+    db.exec(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY, cwd TEXT NOT NULL DEFAULT '',
+        repo_remote TEXT, repo_owner TEXT, repo_name TEXT,
+        started_at INTEGER NOT NULL, ended_at INTEGER,
+        pi_version TEXT NOT NULL DEFAULT 'unknown'
+      );
+      CREATE TABLE turns (
+        id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+        idx INTEGER NOT NULL DEFAULT 0, started_at INTEGER NOT NULL,
+        ended_at INTEGER, model_id TEXT, provider TEXT
+      );
+      CREATE TABLE llm_messages (
+        id TEXT PRIMARY KEY, turn_id TEXT NOT NULL, session_id TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'assistant', ts INTEGER NOT NULL,
+        input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_read_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+        cost_input REAL NOT NULL DEFAULT 0, cost_output REAL NOT NULL DEFAULT 0,
+        cost_cache_read REAL NOT NULL DEFAULT 0, cost_cache_write REAL NOT NULL DEFAULT 0,
+        cost_total REAL NOT NULL DEFAULT 0, model_id TEXT, provider TEXT
+      );
+      CREATE TABLE tool_calls (
+        id TEXT PRIMARY KEY, turn_id TEXT NOT NULL, session_id TEXT NOT NULL,
+        name TEXT NOT NULL, started_at INTEGER NOT NULL, ended_at INTEGER NOT NULL,
+        is_error INTEGER NOT NULL DEFAULT 0
+      );
+      INSERT INTO sessions VALUES
+        ('s1', '/tmp/repo', 'https://oauth2:ghp_secret_token@github.com/owner/repo.git',
+         'owner', 'repo', 1700000000000, 1700003600000, '1.0.0');
+    `);
+    db.close();
+
+    const outcome = await importLegacyPi({ sourcePath: legacyPath, dbPath: centralPath });
+    assert.ok(outcome.ok, `import failed: ${outcome.ok ? "" : outcome.error}`);
+
+    const centralDb = openDb(centralPath);
+    const row = /** @type {{ repo_remote: string | null }} */ (
+      centralDb.prepare("SELECT repo_remote FROM sessions LIMIT 1").get()
+    );
+    centralDb.close();
+
+    assert.ok(row != null && row.repo_remote != null, "repo_remote should be set");
+    assert.equal(
+      row.repo_remote,
+      "https://github.com/owner/repo.git",
+      "importer must strip credentials from repo_remote"
+    );
+    assert.ok(
+      !row.repo_remote.includes("ghp_secret_token"),
+      "token must not appear in stored repo_remote"
+    );
+  });
+
   test("cost_total_micros satisfies CHECK constraint (sum of breakdown columns)", async () => {
     const legacyPath = join(tmp.dir, "legacy-check.db");
     const centralPath = join(tmp.dir, "central-check.db");

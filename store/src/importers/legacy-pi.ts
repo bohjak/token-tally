@@ -50,6 +50,7 @@ import { dirname, join } from "path";
 import { mkdirSync } from "fs";
 import { defaultDatabasePath } from "../paths";
 import { AnalyticsWriter } from "../writer";
+import { redactRemoteUrl } from "../util";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -419,17 +420,25 @@ function runImportTransaction(
   // is a parsing + planning step; done once here, reused per row inside.
   // ---------------------------------------------------------------------------
 
+  // The import must NOT overwrite an existing live harness version or
+  // integration_version that was written by the real Pi writer extension.
+  // COALESCE(existing, incoming) keeps the live writer's values when present
+  // and only fills in the importer's values when the column is currently null.
   const stmtUpsertHarness = centralDb.prepare(`
     INSERT INTO harnesses
       (name, display_name, version, integration_version, first_seen_at, last_seen_at)
     VALUES
       ($name, $displayName, $version, $integrationVersion, $now, $now)
     ON CONFLICT (name) DO UPDATE SET
-      version             = excluded.version,
-      integration_version = excluded.integration_version,
+      version             = COALESCE(harnesses.version,             excluded.version),
+      integration_version = COALESCE(harnesses.integration_version, excluded.integration_version),
       last_seen_at        = excluded.last_seen_at
   `);
 
+  // Partial-update safety: COALESCE preserves non-null stored values so that
+  // a repeated import run cannot clobber richer data written by a previous run
+  // or by the live Pi writer extension.  NULLIF(started_at, 0) guards against
+  // an accidental zero sentinel the same way the writer.ts upsert does.
   const stmtUpsertSession = centralDb.prepare(`
     INSERT INTO sessions
       (id, harness_id, harness_session_id, cwd,
@@ -438,11 +447,11 @@ function runImportTransaction(
       ($id, $harnessId, $harnessSessionId, $cwd,
        $repoRemote, $repoOwner, $repoName, $startedAt, $endedAt)
     ON CONFLICT (harness_id, harness_session_id) DO UPDATE SET
-      cwd        = excluded.cwd,
-      repo_remote= excluded.repo_remote,
-      repo_owner = excluded.repo_owner,
-      repo_name  = excluded.repo_name,
-      started_at = excluded.started_at,
+      cwd        = COALESCE(excluded.cwd,        sessions.cwd),
+      repo_remote= COALESCE(excluded.repo_remote, sessions.repo_remote),
+      repo_owner = COALESCE(excluded.repo_owner,  sessions.repo_owner),
+      repo_name  = COALESCE(excluded.repo_name,   sessions.repo_name),
+      started_at = COALESCE(NULLIF(excluded.started_at, 0), sessions.started_at),
       ended_at   = COALESCE(excluded.ended_at, sessions.ended_at)
     RETURNING id
   `);
@@ -456,7 +465,7 @@ function runImportTransaction(
        $startedAt, $endedAt, $provider, $modelId)
     ON CONFLICT (session_id, harness_turn_id) DO UPDATE SET
       turn_index = COALESCE(excluded.turn_index, turns.turn_index),
-      started_at = excluded.started_at,
+      started_at = COALESCE(NULLIF(excluded.started_at, 0), turns.started_at),
       ended_at   = COALESCE(excluded.ended_at, turns.ended_at),
       provider   = COALESCE(excluded.provider,  turns.provider),
       model_id   = COALESCE(excluded.model_id,  turns.model_id)
@@ -538,13 +547,16 @@ function runImportTransaction(
     // 2. Sessions.
     for (const row of legacySessions) {
       const proposed = randomUUID();
+      // Redact any credentials from the remote URL before storing.
+      const repoRemote =
+        row.repo_remote != null ? redactRemoteUrl(row.repo_remote) : null;
       const returned = stmtUpsertSession.get({
         id: proposed,
         harnessId: HARNESS_ID,
         harnessSessionId: row.id,
         // Empty string from the legacy DEFAULT '' is not meaningful; use null.
         cwd: row.cwd !== "" ? row.cwd : null,
-        repoRemote: row.repo_remote ?? null,
+        repoRemote,
         repoOwner:  row.repo_owner  ?? null,
         repoName:   row.repo_name   ?? null,
         startedAt:  row.started_at,

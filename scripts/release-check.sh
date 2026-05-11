@@ -142,6 +142,11 @@ check_swift_build() {
 
 check_swift_tests() {
   section "Swift tests"
+  if ! xcrun --find xctest >/dev/null 2>&1; then
+    fail "swift tests require full Xcode (xctest not found)"
+    return
+  fi
+
   # Run everything except PerformanceTests, which need the large fixture.
   # PerformanceTests are handled separately in check_perf.
   if (cd "${REPO_ROOT}" && swift test --package-path clients/macos-tray \
@@ -211,7 +216,7 @@ check_perf() {
       swift test --package-path clients/macos-tray --filter PerformanceTests 2>&1); then
     pass "swift performance tests: passed"
   else
-    fail "swift performance tests: failed (see SMOKE.md for budget details)"
+    fail "swift performance tests: failed"
   fi
 }
 

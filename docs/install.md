@@ -9,21 +9,22 @@ ToTally. For the quick-start, see the [README](../README.md).
 
 | Requirement | Version | How to install |
 |---|---|---|
-| macOS | 13 or later | — |
+| macOS | 14 or later | — |
 | Command Line Tools / Xcode | current | `xcode-select --install` |
 | Node.js | ≥ 20 | `n lts` or [nodejs.org](https://nodejs.org) |
 | pnpm | any | `npm install -g pnpm` |
 | SQLite | bundled with macOS | — |
 
 The installer checks for Node.js and pnpm and prints a clear error if either is
-missing. The Swift build requires Command Line Tools or full Xcode.
+missing. The Swift build requires Command Line Tools or full Xcode; Swift tests
+(`make test`) require full Xcode because they need `xctest`.
 
 ---
 
 ## Installing
 
 ```sh
-git clone https://github.com/<owner>/token-tally
+git clone https://github.com/bohjak/token-tally
 cd token-tally
 make install
 ```
@@ -33,23 +34,41 @@ each component in order:
 
 1. **Store & CLI** — installs pnpm workspace dependencies, builds the
    `@token-tally/store` TypeScript package, links the `token-tally` binary
-   globally via pnpm, and creates or migrates the central database.
+   globally via pnpm, and creates or migrates the central database. The global
+   binary location depends on your pnpm configuration (typically
+   `~/.local/share/pnpm/` or `~/.pnpm/`).
 
 2. **Tray app** — builds `clients/macos-tray` in release mode, assembles
-   `ToTally.app`, installs it atomically to `/Applications/ToTally.app`, and
-   launches it. The app registers itself as a login item on first launch
-   (see [Launch at login](#launch-at-login)).
+   `ToTally.app`, stops any running instance, installs it atomically to
+   `/Applications/ToTally.app`, and launches it. The app registers itself as a
+   login item on first launch (see [Launch at login](#launch-at-login)).
 
-3. **Pi integration** — creates two symlinks under
-   `~/.pi/agent/extensions/`:
+3. **Pi integration** (optional) — if `~/.pi` exists, creates two symlinks
+   under `~/.pi/agent/extensions/`:
    - `token-tally-writer` → `<repo>/harnesses/pi/writer-extension`
    - `token-tally-usage` → `<repo>/clients/pi-usage-command`
+
+   Pi is not required. The tray app and CLI work independently of any harness.
 
 4. **Manifest** — writes `~/.config/token-tally/install.json` with the
    repo path, component status, database path, and schema version.
 
 A failure in step 1 (store) aborts the run — it is the foundation. Failures in
 steps 2 or 3 are reported and printed, but the other components still complete.
+
+### Gatekeeper and unsigned app
+
+ToTally.app is not signed with an Apple Developer certificate. On first launch
+macOS Gatekeeper may block it with a message like "ToTally cannot be opened
+because the developer cannot be verified."
+
+To allow it:
+
+1. Open **System Settings → Privacy & Security**.
+2. Scroll to the **Security** section.
+3. Click **Open Anyway** next to the ToTally entry.
+
+You only need to do this once.
 
 ### Directories created
 
@@ -78,7 +97,7 @@ make install
 The installer is fully idempotent:
 
 - an already-migrated database is left unchanged unless there are new migrations
-- the tray app is rebuilt and reinstalled (a running instance is quit first)
+- the tray app is rebuilt and reinstalled (a running instance is stopped first)
 - extension symlinks are verified and recreated if pointing elsewhere
 - the install manifest is updated with the new `updatedAt` timestamp
 
@@ -97,7 +116,7 @@ Checks:
 - `token-tally` binary is on PATH and resolves
 - Central database is reachable and schema version is current
 - `/Applications/ToTally.app` is installed and matches the manifest version
-- Pi extension symlinks exist and point to the repo
+- Pi extension symlinks exist and point to the repo (skipped if Pi is absent)
 - Install manifest is present
 
 ```sh
@@ -128,13 +147,15 @@ If the current user cannot write to `/Applications`, the installer exits with a
 clear error:
 
 ```
-✗  /Applications is not writable.
-   Re-run with elevated permissions or grant write access:
-     sudo make install
+✗  /Applications is not writable by the current user.
+   Do NOT run 'sudo make install' — that runs the entire build chain as root.
 ```
 
 ToTally does **not** silently fall back to `~/Applications`. The store CLI and
-Pi extensions are still installed even when the tray step fails.
+Pi extensions are still installed even when the tray step fails. To install the
+already-built app bundle only, either copy it with administrator privileges or
+open `clients/macos-tray/dist/` in Finder and drag `ToTally.app` into
+`/Applications` when prompted.
 
 ---
 
@@ -160,7 +181,7 @@ The command:
 - preserves cost provenance where the legacy data allows; uses `unknown` where
   it cannot
 - is idempotent — running it again imports nothing new (delta = 0)
-- records import metadata in `schema_metadata` so `make doctor` can surface it
+- records import metadata in `schema_metadata` for diagnostics
 
 Optional flags:
 
@@ -170,8 +191,7 @@ token-tally import legacy-pi \
   --db ~/.local/share/token-tally/events.db  # default
 ```
 
-The installer **never runs this automatically**. It prints a notice if the
-legacy database is detected and shows the command, but the import is always an
+The installer **never runs this automatically**. The import is always an
 explicit user action.
 
 ---
@@ -232,7 +252,8 @@ Pi database. Delete those manually if needed.
 token-tally migrate
 ```
 
-Safe to run repeatedly. Applies any pending schema migrations and exits.
+Safe to run repeatedly. Applies any pending schema migrations and exits. See
+[`docs/schema.md`](schema.md) for the schema and versioning reference.
 
 ### Drain spool files manually
 

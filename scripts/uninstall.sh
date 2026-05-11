@@ -110,7 +110,8 @@ remove_app() {
   fi
   if [[ ! -w "/Applications" ]]; then
     err "/Applications is not writable; cannot remove ${app_path}"
-    err "Re-run with elevated permissions: sudo make uninstall"
+    err "Do NOT run 'sudo make uninstall'. Remove the app directly as admin:"
+    err "    sudo rm -rf /Applications/ToTally.app"
     return 1
   fi
   rm -rf "${app_path}"

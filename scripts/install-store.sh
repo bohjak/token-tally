@@ -58,9 +58,11 @@ main() {
   fi
 
   # ---- Install pnpm workspace dependencies ----
-  # pnpm install is idempotent; it's a no-op when the lockfile matches.
+  # --frozen-lockfile ensures no accidental lockfile mutation during install.
+  # We do NOT pipe through sed so that native-addon postinstall output reaches
+  # the terminal unfiltered (hidden output can mask build failures).
   echo "  Installing npm dependencies…"
-  pnpm install --dir "${repo_root}" --silent 2>&1 | sed 's/^/    /' || {
+  pnpm install --dir "${repo_root}" --frozen-lockfile || {
     err "pnpm install failed"
     return 1
   }

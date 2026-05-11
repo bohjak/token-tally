@@ -32,6 +32,7 @@
 
 import { randomUUID } from "crypto";
 import Database from "better-sqlite3";
+import { redactRemoteUrl } from "./util";
 import {
   MAX_KNOWN_SCHEMA_VERSION,
   MIN_SUPPORTED_SCHEMA_VERSION,
@@ -89,8 +90,14 @@ function prepareStatements(db: Database.Database): PreparedStatements {
     `),
 
     // sessions: idempotency key (harness_id, harness_session_id).
-    // ended_at preserves the existing value if the new value is NULL (session
-    // start events arrive before close events, so replaying start is safe).
+    // All nullable and time fields use COALESCE / NULLIF so that close or replay
+    // events (which may carry null repo fields or startedAt = 0) can never
+    // clobber values that were written by an earlier, richer event:
+    //   started_at   — NULLIF(excluded, 0) guards against the close-event
+    //                  sentinel value of 0; falls back to the stored value.
+    //   session_file, cwd, repo_* — prefer the incoming value only when it is
+    //                  non-null; otherwise keep what is already stored.
+    //   ended_at     — existing behaviour: keep stored value when new is null.
     upsertSession: db.prepare(`
       INSERT INTO sessions
         (id, harness_id, harness_session_id, session_file, cwd,
@@ -99,17 +106,18 @@ function prepareStatements(db: Database.Database): PreparedStatements {
         ($id, $harnessId, $harnessSessionId, $sessionFile, $cwd,
          $repoOwner, $repoName, $repoRemote, $startedAt, $endedAt)
       ON CONFLICT (harness_id, harness_session_id) DO UPDATE SET
-        session_file = excluded.session_file,
-        cwd          = excluded.cwd,
-        repo_owner   = excluded.repo_owner,
-        repo_name    = excluded.repo_name,
-        repo_remote  = excluded.repo_remote,
-        started_at   = excluded.started_at,
+        session_file = COALESCE(excluded.session_file, sessions.session_file),
+        cwd          = COALESCE(excluded.cwd,          sessions.cwd),
+        repo_owner   = COALESCE(excluded.repo_owner,   sessions.repo_owner),
+        repo_name    = COALESCE(excluded.repo_name,    sessions.repo_name),
+        repo_remote  = COALESCE(excluded.repo_remote,  sessions.repo_remote),
+        started_at   = COALESCE(NULLIF(excluded.started_at, 0), sessions.started_at),
         ended_at     = COALESCE(excluded.ended_at, sessions.ended_at)
       RETURNING id
     `),
 
     // turns: idempotency key (session_id, harness_turn_id).
+    // started_at uses COALESCE/NULLIF for the same reason as sessions above.
     upsertTurn: db.prepare(`
       INSERT INTO turns
         (id, session_id, harness_id, harness_turn_id, turn_index,
@@ -119,7 +127,7 @@ function prepareStatements(db: Database.Database): PreparedStatements {
          $startedAt, $endedAt, $provider, $modelId)
       ON CONFLICT (session_id, harness_turn_id) DO UPDATE SET
         turn_index = COALESCE(excluded.turn_index, turns.turn_index),
-        started_at = excluded.started_at,
+        started_at = COALESCE(NULLIF(excluded.started_at, 0), turns.started_at),
         ended_at   = COALESCE(excluded.ended_at, turns.ended_at),
         provider   = COALESCE(excluded.provider, turns.provider),
         model_id   = COALESCE(excluded.model_id, turns.model_id)
@@ -295,6 +303,9 @@ function writeSession(
   payload: SessionPayload
 ): string {
   const id = randomUUID();
+  // Redact any credentials embedded in the remote URL before storage.
+  const repoRemote =
+    payload.repoRemote != null ? redactRemoteUrl(payload.repoRemote) : null;
   const row = stmts.upsertSession.get({
     id,
     harnessId: payload.harnessId,
@@ -303,7 +314,7 @@ function writeSession(
     cwd: payload.cwd ?? null,
     repoOwner: payload.repoOwner ?? null,
     repoName: payload.repoName ?? null,
-    repoRemote: payload.repoRemote ?? null,
+    repoRemote,
     startedAt: payload.startedAt,
     endedAt: payload.endedAt ?? null,
   }) as { id: string } | undefined;

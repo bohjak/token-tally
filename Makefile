@@ -24,5 +24,14 @@ doctor:
 	@scripts/doctor.sh
 
 test:
-	@swift test --package-path clients/macos-tray
-	# pnpm -r test is enabled in T13 once store tests exist
+	@pnpm --filter @token-tally/store build
+	@pnpm --filter @token-tally/store test
+	@if ! xcrun --find xctest >/dev/null 2>&1; then \
+	  printf '\nERROR: xctest not found — full Xcode is required to run Swift tests.\n'; \
+	  printf '  Install Xcode from the App Store, then switch the active developer tools:\n'; \
+	  printf '    sudo xcode-select --switch /Applications/Xcode.app\n'; \
+	  printf '  Then retry '"'"'make test'"'"'.\n\n'; \
+	  exit 1; \
+	fi
+	@swift test --package-path clients/macos-tray \
+	  --filter "AnalyticsQueriesTests|FormattersTests|AnalyticsTrayTests"

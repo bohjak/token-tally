@@ -338,6 +338,149 @@ describe("AnalyticsWriter — upserts and idempotency", () => {
   });
 
   // ---------------------------------------------------------------------------
+  // Session upsert integrity (data-integrity regression tests)
+  // ---------------------------------------------------------------------------
+
+  test("recordSession close event with startedAt=0 does not clobber real started_at", async () => {
+    const { writer, dbPath } = await freshWriter("session-started-at-guard");
+    await writer.recordHarness({ name: "pi", displayName: "Pi" });
+
+    const realStart = 1_700_000_000_000;
+
+    // First write: the session start event with a real timestamp.
+    const r1 = await writer.recordSession({
+      harnessId: "pi",
+      harnessSessionId: "guard-sess-1",
+      cwd: "/tmp/project",
+      repoOwner: "owner",
+      repoName: "repo",
+      startedAt: realStart,
+    });
+
+    // Second write: a close/replay event that sends startedAt = 0 (sentinel).
+    await writer.recordSession({
+      harnessId: "pi",
+      harnessSessionId: "guard-sess-1",
+      cwd: "/tmp/project",
+      startedAt: 0,
+      endedAt: realStart + 60_000,
+    });
+
+    await writer.close();
+
+    const db = openDb(dbPath);
+    const row = /** @type {{ started_at: number; ended_at: number }} */ (
+      db.prepare("SELECT started_at, ended_at FROM sessions WHERE harness_session_id='guard-sess-1'").get()
+    );
+    db.close();
+
+    assert.equal(
+      row.started_at,
+      realStart,
+      "started_at must not be clobbered by a close event with startedAt=0"
+    );
+    // ended_at should have been set by the close event.
+    assert.equal(row.ended_at, realStart + 60_000);
+  });
+
+  test("recordSession close event does not clobber existing repo metadata with null", async () => {
+    const { writer, dbPath } = await freshWriter("session-repo-guard");
+    await writer.recordHarness({ name: "pi", displayName: "Pi" });
+
+    const realStart = 1_700_000_000_000;
+
+    // First write: session start with repo metadata (e.g. from async git capture).
+    await writer.recordSession({
+      harnessId: "pi",
+      harnessSessionId: "repo-guard-sess-1",
+      cwd: "/tmp/my-project",
+      repoOwner: "acme-corp",
+      repoName: "my-project",
+      repoRemote: "https://github.com/acme-corp/my-project.git",
+      startedAt: realStart,
+    });
+
+    // Second write: close event — no repo metadata (harness doesn't re-send it).
+    await writer.recordSession({
+      harnessId: "pi",
+      harnessSessionId: "repo-guard-sess-1",
+      cwd: "/tmp/my-project",
+      startedAt: 0,
+      endedAt: realStart + 120_000,
+    });
+
+    await writer.close();
+
+    const db = openDb(dbPath);
+    const row = /** @type {{ repo_owner: string; repo_name: string; repo_remote: string }} */ (
+      db.prepare(
+        "SELECT repo_owner, repo_name, repo_remote FROM sessions WHERE harness_session_id='repo-guard-sess-1'"
+      ).get()
+    );
+    db.close();
+
+    assert.equal(row.repo_owner,  "acme-corp",                                    "repo_owner must be preserved");
+    assert.equal(row.repo_name,   "my-project",                                   "repo_name must be preserved");
+    assert.equal(row.repo_remote, "https://github.com/acme-corp/my-project.git",  "repo_remote must be preserved");
+  });
+
+  test("recordSession strips credentials from repo_remote before storage", async () => {
+    const { writer, dbPath } = await freshWriter("session-remote-redact");
+    await writer.recordHarness({ name: "pi", displayName: "Pi" });
+
+    await writer.recordSession({
+      harnessId: "pi",
+      harnessSessionId: "redact-sess-1",
+      repoOwner: "owner",
+      repoName: "repo",
+      repoRemote: "https://user:ghp_supersecrettoken@github.com/owner/repo.git",
+      startedAt: Date.now(),
+    });
+
+    await writer.close();
+
+    const db = openDb(dbPath);
+    const row = /** @type {{ repo_remote: string }} */ (
+      db.prepare("SELECT repo_remote FROM sessions WHERE harness_session_id='redact-sess-1'").get()
+    );
+    db.close();
+
+    assert.equal(
+      row.repo_remote,
+      "https://github.com/owner/repo.git",
+      "repo_remote must not contain embedded credentials"
+    );
+    assert.ok(
+      !row.repo_remote.includes("ghp_supersecrettoken"),
+      "token must be absent from stored repo_remote"
+    );
+  });
+
+  test("recordSession SSH remote is stored unchanged (no credential stripping)", async () => {
+    const { writer, dbPath } = await freshWriter("session-ssh-remote");
+    await writer.recordHarness({ name: "pi", displayName: "Pi" });
+
+    const sshRemote = "git@github.com:owner/repo.git";
+
+    await writer.recordSession({
+      harnessId: "pi",
+      harnessSessionId: "ssh-remote-sess-1",
+      repoRemote: sshRemote,
+      startedAt: Date.now(),
+    });
+
+    await writer.close();
+
+    const db = openDb(dbPath);
+    const row = /** @type {{ repo_remote: string }} */ (
+      db.prepare("SELECT repo_remote FROM sessions WHERE harness_session_id='ssh-remote-sess-1'").get()
+    );
+    db.close();
+
+    assert.equal(row.repo_remote, sshRemote, "SSH remote must be stored unchanged");
+  });
+
+  // ---------------------------------------------------------------------------
   // Lifecycle
   // ---------------------------------------------------------------------------
 
