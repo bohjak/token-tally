@@ -1,0 +1,24 @@
+{
+  "name": "@token-tally/pi-usage-command",
+  "version": "0.1.0",
+  "description": "Pi usage command client — /usage and /analytics doctor reading from the ToTally central store",
+  "type": "module",
+  "private": true,
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.6.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}

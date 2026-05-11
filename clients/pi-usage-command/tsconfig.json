@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    // Target modern Node.js (≥20) that Pi uses.
+    "target": "ES2022",
+    "module": "esnext",
+    // bundler resolution: lets TypeScript resolve .ts extension imports and
+    // package.json "exports" fields. Matches how Pi loads extensions at runtime
+    // (esbuild / ts-node / native type-stripping).
+    "moduleResolution": "bundler",
+    "strict": true,
+    // Pi runs TypeScript directly; no compilation step needed.
+    "noEmit": true,
+    // Required alongside noEmit + bundler resolution: lets sibling files import
+    // each other with the .ts extension that the Node.js type-stripping runtime needs.
+    "allowImportingTsExtensions": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true
+  },
+  "include": ["index.ts", "src/**/*.ts"],
+  "exclude": ["node_modules"]
+}
