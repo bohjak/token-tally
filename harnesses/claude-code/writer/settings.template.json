@@ -1,0 +1,75 @@
+{
+  "_readme": "ToTally — Claude Code hook settings template. This file shows the hooks block to merge into ~/.claude/settings.json. Do NOT replace your entire settings.json with this file — copy the 'hooks' block and merge it with any hooks you already have. Each event entry may contain multiple matchers; if you already have matchers for an event, append a new entry to that event's array.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "token-tally-claude-hook"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "token-tally-claude-hook"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "token-tally-claude-hook"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "token-tally-claude-hook"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "token-tally-claude-hook"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "token-tally-claude-hook"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "token-tally-claude-hook"
+          }
+        ]
+      }
+    ]
+  }
+}

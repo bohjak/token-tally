@@ -28,6 +28,19 @@ importers:
         specifier: ^5.5.0
         version: 5.9.3
 
+  harnesses/claude-code/writer:
+    dependencies:
+      '@token-tally/store':
+        specifier: workspace:*
+        version: link:../../../store
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.12.3
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+
   harnesses/pi/writer-extension:
     dependencies:
       '@token-tally/store':

@@ -1,4 +1,5 @@
 packages:
   - store
   - harnesses/pi/writer-extension
+  - harnesses/claude-code/writer
   - clients/pi-usage-command
