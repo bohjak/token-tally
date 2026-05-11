@@ -1,25 +1,21 @@
 # Security Policy
 
+This is a public personal project with no ongoing maintenance or support
+commitment. Use it at your own risk.
+
 ## Supported versions
 
-Only the latest commit on the `main` branch is actively maintained.
+There are no formally supported versions. The latest commit on `main` is simply
+the current public state of the project.
 
 ## Reporting a vulnerability
 
 Please **do not** open a public GitHub issue for security vulnerabilities.
 
-Report security issues by emailing the maintainer directly (see the commit
-history for contact details) or by using
-[GitHub private vulnerability reporting](https://github.com/bohjak/token-tally/security/advisories/new).
-
-Include:
-
-- A description of the vulnerability and its potential impact
-- Steps to reproduce or a minimal proof-of-concept
-- Any relevant environment details (macOS version, Node.js version, etc.)
-
-You can expect an acknowledgement within **72 hours** and a fix or mitigation
-plan within **14 days** for confirmed issues.
+If you choose to report a security issue, use
+[GitHub private vulnerability reporting](https://github.com/bohjak/token-tally/security/advisories/new)
+when available. Reports may not be acknowledged, investigated, or fixed.
+There is no response-time or remediation guarantee.
 
 ## Scope
 

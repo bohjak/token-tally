@@ -1,17 +1,22 @@
-# Contributing to ToTally
+# Contributions
 
-Thanks for your interest in contributing! This project is in early development
-and the scope is intentionally narrow for now.
+This repository is public so people can inspect, use, and fork the code under
+the MIT License. It is not necessarily an actively maintained open-source
+project, and it does not currently carry an expectation that outside
+contributions will be reviewed or accepted.
 
-## Before you start
+Please assume:
 
-- Check existing [issues](https://github.com/bohjak/token-tally/issues) and
-  [pull requests](https://github.com/bohjak/token-tally/pulls) to avoid
-  duplicate work.
-- For significant changes (new harness integrations, schema changes, new
-  features), open an issue first to discuss the approach.
+- issues and feature requests may not be read or answered;
+- pull requests may not be reviewed, merged, or discussed;
+- there is no support commitment, roadmap, release cadence, or compatibility
+  guarantee;
+- maintainers may close, ignore, or leave submissions unanswered for any reason.
 
-## Development setup
+If you want changes, the most reliable path is to fork the project and maintain
+those changes yourself.
+
+## Development notes for forks
 
 ```sh
 git clone https://github.com/bohjak/token-tally
@@ -34,7 +39,7 @@ swift build --package-path clients/macos-tray
 swift test  --package-path clients/macos-tray
 ```
 
-## Coding conventions
+General conventions:
 
 - TypeScript: follow the existing patterns; run `pnpm typecheck` before
   committing.
@@ -43,26 +48,10 @@ swift test  --package-path clients/macos-tray
   available.
 - Keep commits atomic — one logical change per commit.
 
-## Adding a new harness integration
-
-See [`docs/plugin-authoring.md`](docs/plugin-authoring.md) for the integration
-guide. New integrations live under `harnesses/<name>/` or `clients/<name>/`
-following the Pi layout as a reference.
-
-## Schema changes
-
-Any change to the SQLite schema requires a new numbered migration file in
-`store/schema/`. See [`docs/schema.md`](docs/schema.md) for the versioning
-convention.
-
-## Pull requests
-
-- Target the `main` branch.
-- Include a short description of what changed and why.
-- Ensure `make doctor` passes on a clean install.
-- Do not include generated files (`dist/`, `*.db`) in the PR.
+For harness integrations, see [`docs/plugin-authoring.md`](docs/plugin-authoring.md).
+For schema changes, see [`docs/schema.md`](docs/schema.md).
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the
-project's [MIT License](LICENSE).
+Any contributions that are accepted are licensed under the project's
+[MIT License](LICENSE).

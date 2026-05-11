@@ -12,6 +12,24 @@ and shows a glanceable summary in the macOS menu bar.
 
 ---
 
+## Project status and support
+
+This is a public personal project. You are welcome to read, fork, install, and
+use it under the MIT License, but publication does **not** imply an ongoing
+maintenance commitment.
+
+Please assume:
+
+- no support, roadmap, release cadence, or compatibility guarantees;
+- issues and feature requests may not be read or answered;
+- pull requests may not be reviewed or accepted;
+- the repository may change direction, go quiet, or stop being updated at any
+  time.
+
+If you rely on ToTally, you should be comfortable maintaining your own fork.
+
+---
+
 ## Quick start
 
 ```sh
