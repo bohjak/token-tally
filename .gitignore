@@ -1,3 +1,23 @@
+# Build outputs / dependencies
 .build/
 dist/
+node_modules/
+
+# Swift / Xcode local state
+.swiftpm/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# Agent scratch space
+.plan/
+
+# Local OS/editor noise
 .DS_Store
+
+# Local analysis/export artifacts
+*.log
+llm_deleted_dedup_*.csv
+tool_deleted_dedup_*.csv
+potential_duplicates_*.csv
+potential_tool_duplicates_*.csv
