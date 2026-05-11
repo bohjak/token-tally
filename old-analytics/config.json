@@ -1,0 +1,22 @@
+{
+  "local": {
+    "enabled": true,
+    "dbPath": "~/.pi/analytics/events.db",
+    "rawLogDir": "~/.pi/analytics/raw"
+  },
+  "privacy": {
+    "storePrompts": "hashed",
+    "storeToolArgs": "summary",
+    "storeToolOutputs": "size-only",
+    "redactPatterns": [
+      "api[_-]?key",
+      "bearer\\s+\\S+",
+      "ghp_\\w+"
+    ]
+  },
+  "git": {
+    "enabled": true,
+    "fetchPR": true,
+    "ghTimeoutMs": 2000
+  }
+}

@@ -1,0 +1,9 @@
+node_modules/
+
+# SQLite database files
+*.db
+*.db-shm
+*.db-wal
+
+# Raw NDJSON event logs (potentially large, contain usage data)
+raw/
