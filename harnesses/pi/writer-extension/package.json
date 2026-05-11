@@ -1,0 +1,22 @@
+{
+  "name": "@token-tally/pi-writer",
+  "version": "0.1.0",
+  "description": "Pi harness writer extension for ToTally — captures sessions, turns, LLM messages, and tool calls into the central store.",
+  "type": "module",
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@token-tally/store": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

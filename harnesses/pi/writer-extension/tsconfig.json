@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    // Emit modern JS; Pi runs TypeScript directly via its own loader.
+    "target": "ES2022",
+    "module": "esnext",
+    // "bundler" matches how Pi/tsx resolves modules — allows CJS deps (like
+    // @token-tally/store) to be imported from ESM source, and allows .ts
+    // extensions in relative imports.
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "strict": true,
+    // Pi loads .ts source directly — no output needed.
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules"]
+}
