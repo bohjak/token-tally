@@ -171,10 +171,13 @@ check_claude_code() {
   if [[ -L "${hook_link}" ]]; then
     local target
     target=$(readlink "${hook_link}")
-    if [[ -e "${target}" ]]; then
-      pass "token-tally-claude-hook symlink ok (→ ${target})"
-    else
+    if [[ ! -e "${target}" ]]; then
       fail "token-tally-claude-hook target missing (${target})"
+    elif [[ ! -x "${target}" ]]; then
+      fail "token-tally-claude-hook target is not executable (${target})"
+      fail "  Run 'make install' to repair permissions."
+    else
+      pass "token-tally-claude-hook symlink ok (→ ${target})"
     fi
   elif [[ -e "${hook_link}" ]]; then
     fail "${hook_link} exists but is not a symlink — unexpected state"

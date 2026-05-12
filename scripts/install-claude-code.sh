@@ -166,6 +166,7 @@ main() {
   fi
 
   pnpm --dir "${repo_root}" --filter @token-tally/claude-code-writer build
+  chmod +x "${hook_target}"
   info "Claude Code writer built"
 
   mkdir -p "${HOME}/.local/bin"

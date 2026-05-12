@@ -8,7 +8,7 @@
     "token-tally-claude-hook": "./dist/bin/token-tally-claude-hook.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && chmod +x dist/bin/token-tally-claude-hook.js",
     "typecheck": "tsc --noEmit",
     "test": "node --test 'dist/tests/**/*.test.js'"
   },
