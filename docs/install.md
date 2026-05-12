@@ -50,11 +50,18 @@ each component in order:
 
    Pi is not required. The tray app and CLI work independently of any harness.
 
-4. **Manifest** — writes `~/.config/token-tally/install.json` with the
+4. **Claude Code integration** (optional) — if `~/.claude` exists, builds the
+   Claude Code writer, symlinks `~/.local/bin/token-tally-claude-hook` to the
+   compiled hook binary, and merges ToTally-owned hook commands into
+   `~/.claude/settings.json`. The installer backs up an existing settings file
+   before modifying it and preserves all non-ToTally hooks and settings.
+
+5. **Manifest** — writes `~/.config/token-tally/install.json` with the
    repo path, component status, database path, and schema version.
 
 A failure in step 1 (store) aborts the run — it is the foundation. Failures in
-steps 2 or 3 are reported and printed, but the other components still complete.
+steps 2, 3, or 4 are reported and printed, but the other components still
+complete.
 
 ### Gatekeeper and unsigned app
 
@@ -77,6 +84,7 @@ You only need to do this once.
 ~/.local/share/token-tally/spool/     # NDJSON write-ahead spool
 ~/.config/token-tally/                # config and install manifest
 ~/.local/state/token-tally/logs/      # log files
+~/.local/state/token-tally/claude-code/ # Claude Code hook offsets/counters
 ```
 
 Where `$XDG_DATA_HOME`, `$XDG_CONFIG_HOME`, or `$XDG_STATE_HOME` are set, those
@@ -99,6 +107,7 @@ The installer is fully idempotent:
 - an already-migrated database is left unchanged unless there are new migrations
 - the tray app is rebuilt and reinstalled (a running instance is stopped first)
 - extension symlinks are verified and recreated if pointing elsewhere
+- Claude Code hook settings are re-merged idempotently
 - the install manifest is updated with the new `updatedAt` timestamp
 
 There is no separate `make update` command.
@@ -117,14 +126,15 @@ Checks:
 - Central database is reachable and schema version is current
 - `/Applications/ToTally.app` is installed and matches the manifest version
 - Pi extension symlinks exist and point to the repo (skipped if Pi is absent)
+- Claude Code hook symlink and settings entries are present (skipped with warnings if Claude Code is absent)
 - Install manifest is present
 
 ```sh
 make test
 ```
 
-Runs the Swift test suite (`swift test --package-path clients/macos-tray`) and
-the store test suite once store tests are committed.
+Runs the store test suite, the Claude Code writer test suite, and the Swift
+tray test suite (`swift test --package-path clients/macos-tray`).
 
 ---
 
@@ -207,6 +217,8 @@ Default behaviour:
 - Quits ToTally if it is running.
 - Removes `/Applications/ToTally.app` (if installed by this repo).
 - Removes Pi extension symlinks `~/.pi/agent/extensions/token-tally-*`.
+- Removes the Claude Code hook symlink and ToTally-owned entries from
+  `~/.claude/settings.json`.
 - Removes the install manifest `~/.config/token-tally/install.json`.
 - **Prints** the paths of user data but does **not** delete them.
 - **Never touches** `~/.pi/analytics/events.db`.
@@ -216,6 +228,7 @@ Default behaviour:
 ```sh
 scripts/uninstall.sh --keep-app      # skip tray app removal
 scripts/uninstall.sh --keep-pi       # skip Pi extension removal
+scripts/uninstall.sh --keep-claude-code  # skip Claude Code hook removal
 ```
 
 ### Removing analytics data (purge)

@@ -5,6 +5,7 @@
 #   - Quit ToTally if running.
 #   - Remove /Applications/ToTally.app (if manifest-tracked or present).
 #   - Remove Pi extension symlinks under ~/.pi/agent/extensions/token-tally-*.
+#   - Remove the Claude Code hook symlink and ToTally-owned settings entries.
 #   - Remove the install manifest (~/.config/token-tally/install.json).
 #   - Print paths of user data (DB, spool, logs) but DO NOT delete them.
 #   - Leave ~/.pi/analytics/events.db (legacy Pi DB) untouched.
@@ -16,6 +17,8 @@
 #   --yes          Skip interactive confirmation for destructive operations.
 #   --keep-app     Skip tray app removal.
 #   --keep-pi      Skip Pi extension removal.
+#   --keep-claude-code
+#                  Skip Claude Code hook removal.
 #   --keep-data    Alias for not passing --purge (default; explicit opt-out).
 set -euo pipefail
 
@@ -54,6 +57,7 @@ OPT_PURGE=false
 OPT_YES=false
 OPT_KEEP_APP=false
 OPT_KEEP_PI=false
+OPT_KEEP_CLAUDE_CODE=false
 
 parse_args() {
   while [[ $# -gt 0 ]]; do
@@ -62,15 +66,17 @@ parse_args() {
       --yes)       OPT_YES=true ;;
       --keep-app)  OPT_KEEP_APP=true ;;
       --keep-pi)   OPT_KEEP_PI=true ;;
+      --keep-claude-code) OPT_KEEP_CLAUDE_CODE=true ;;
       --keep-data) OPT_PURGE=false ;;
       --help|-h)
-        echo "Usage: scripts/uninstall.sh [--purge [--yes]] [--keep-app] [--keep-pi]"
+        echo "Usage: scripts/uninstall.sh [--purge [--yes]] [--keep-app] [--keep-pi] [--keep-claude-code]"
         echo
         echo "Flags:"
-        echo "  --purge        Also delete ToTally user data (DB, spool, logs)"
-        echo "  --yes          Skip confirmation prompts"
-        echo "  --keep-app     Skip removing /Applications/ToTally.app"
-        echo "  --keep-pi      Skip removing Pi extension symlinks"
+        echo "  --purge              Also delete ToTally user data (DB, spool, logs)"
+        echo "  --yes                Skip confirmation prompts"
+        echo "  --keep-app           Skip removing /Applications/ToTally.app"
+        echo "  --keep-pi            Skip removing Pi extension symlinks"
+        echo "  --keep-claude-code   Skip removing Claude Code hooks"
         exit 0
         ;;
       *)
@@ -145,6 +151,96 @@ remove_pi_symlinks() {
   fi
 }
 
+# Remove Claude Code hook symlink and ToTally-owned settings entries.
+remove_claude_code_hooks() {
+  local hook_link="${HOME}/.local/bin/token-tally-claude-hook"
+  local settings_path="${HOME}/.claude/settings.json"
+
+  if [[ -L "${hook_link}" ]]; then
+    local target
+    target=$(readlink "${hook_link}")
+    if [[ "${target}" == "${REPO_ROOT}"/* ]]; then
+      rm "${hook_link}"
+      info "Removed symlink ${hook_link}"
+    else
+      warn "${hook_link} points outside this repo (${target}) — leaving in place"
+    fi
+  elif [[ -e "${hook_link}" ]]; then
+    warn "${hook_link} exists but is not a symlink — leaving in place"
+  else
+    info "Claude Code hook symlink not found — nothing to remove"
+  fi
+
+  if [[ ! -f "${settings_path}" ]]; then
+    info "Claude Code settings not found — nothing to edit"
+    return
+  fi
+
+  TT_CC_SETTINGS_PATH="${settings_path}" python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+settings_path = Path(os.environ["TT_CC_SETTINGS_PATH"])
+try:
+    with settings_path.open() as f:
+        data = json.load(f)
+except json.JSONDecodeError as exc:
+    raise SystemExit(f"settings JSON is malformed: {exc}")
+
+if not isinstance(data, dict):
+    raise SystemExit("settings JSON root must be an object")
+
+hooks_root = data.get("hooks")
+if not isinstance(hooks_root, dict):
+    raise SystemExit(0)
+
+def owned(command: object) -> bool:
+    return isinstance(command, str) and command.startswith("token-tally-claude-hook")
+
+changed = False
+for event in list(hooks_root.keys()):
+    matchers = hooks_root.get(event)
+    if not isinstance(matchers, list):
+        continue
+    new_matchers = []
+    for matcher in matchers:
+        if not isinstance(matcher, dict):
+            new_matchers.append(matcher)
+            continue
+        matcher_copy = dict(matcher)
+        matcher_hooks = matcher_copy.get("hooks", [])
+        if not isinstance(matcher_hooks, list):
+            new_matchers.append(matcher_copy)
+            continue
+        filtered_hooks = [
+            h for h in matcher_hooks
+            if not (isinstance(h, dict) and owned(h.get("command")))
+        ]
+        if len(filtered_hooks) != len(matcher_hooks):
+            changed = True
+        if filtered_hooks:
+            matcher_copy["hooks"] = filtered_hooks
+            new_matchers.append(matcher_copy)
+        elif any(isinstance(h, dict) and owned(h.get("command")) for h in matcher_hooks):
+            # Drop matchers that only contained ToTally-owned hooks.
+            changed = True
+        else:
+            new_matchers.append(matcher_copy)
+    if new_matchers:
+        hooks_root[event] = new_matchers
+    else:
+        del hooks_root[event]
+        changed = True
+
+if changed:
+    with settings_path.open("w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+PY
+  info "Removed ToTally Claude Code hooks from ${settings_path}"
+}
+
 # Remove the install manifest.
 remove_manifest() {
   if [[ -f "${MANIFEST_PATH}" ]]; then
@@ -207,6 +303,14 @@ main() {
     remove_pi_symlinks
   else
     info "Skipping Pi extension removal (--keep-pi)"
+  fi
+
+  # ---- Claude Code ----
+  section "Claude Code hooks"
+  if [[ "${OPT_KEEP_CLAUDE_CODE}" == "false" ]]; then
+    remove_claude_code_hooks
+  else
+    info "Skipping Claude Code hook removal (--keep-claude-code)"
   fi
 
   # ---- Manifest ----

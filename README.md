@@ -44,6 +44,7 @@ make install
 - builds and installs `/Applications/ToTally.app`, restarting it if already running
 - registers the app as a login item (enabled by default; change in Settings)
 - installs the Pi writer and usage-command extensions (if Pi is present)
+- installs Claude Code hooks (if `~/.claude` is present)
 
 Run `make doctor` to confirm everything is healthy.
 
@@ -86,6 +87,7 @@ The installer checks for these and prints a clear error if anything is missing.
 | Tray app | `/Applications/ToTally.app` |
 | Pi writer extension | `~/.pi/agent/extensions/token-tally-writer` → `<repo>/harnesses/pi/writer-extension` |
 | Pi usage client | `~/.pi/agent/extensions/token-tally-usage` → `<repo>/clients/pi-usage-command` |
+| Claude Code hook | `~/.local/bin/token-tally-claude-hook` → `<repo>/harnesses/claude-code/writer/dist/bin/token-tally-claude-hook.js` |
 | CLI binary | wherever pnpm places global binaries on your system |
 | Install manifest | `~/.config/token-tally/install.json` |
 

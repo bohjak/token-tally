@@ -6,7 +6,8 @@
 #   2. Tray app:        /Applications/ToTally.app exists.
 #   3. Pi extensions:   ~/.pi/agent/extensions/token-tally-{writer,usage} point
 #                       to the correct repo paths.
-#   4. Install manifest: present and parseable.
+#   4. Claude Code:     hook binary and ~/.claude/settings.json entries.
+#   5. Install manifest: present and parseable.
 #
 # Legacy Pi data is not checked here; use 'token-tally import legacy-pi'
 # to migrate it into the central store.
@@ -25,6 +26,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 TOKEN_TALLY_DATA_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/token-tally"
 TOKEN_TALLY_CONFIG_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/token-tally"
+TOKEN_TALLY_STATE_DIR="${XDG_STATE_HOME:-${HOME}/.local/state}/token-tally"
 MANIFEST_PATH="${TOKEN_TALLY_CONFIG_DIR}/install.json"
 
 # ---------------------------------------------------------------------------
@@ -145,6 +147,127 @@ check_pi_extensions() {
   done
 }
 
+check_claude_code() {
+  section "Claude Code hooks"
+
+  local claude_dir="${HOME}/.claude"
+  local hook_link="${HOME}/.local/bin/token-tally-claude-hook"
+  local settings_path="${claude_dir}/settings.json"
+
+  if [[ ! -d "${claude_dir}" ]]; then
+    warn "Claude Code settings directory not found (${claude_dir})"
+    warn "Install or run Claude Code first, then re-run 'make install'"
+    return
+  fi
+
+  if command -v claude &>/dev/null; then
+    local version
+    version=$(claude --version 2>/dev/null | head -n 1) || version="(unknown)"
+    pass "claude CLI found at $(command -v claude) (${version:-unknown})"
+  else
+    warn "claude CLI not found in PATH"
+  fi
+
+  if [[ -L "${hook_link}" ]]; then
+    local target
+    target=$(readlink "${hook_link}")
+    if [[ -e "${target}" ]]; then
+      pass "token-tally-claude-hook symlink ok (→ ${target})"
+    else
+      fail "token-tally-claude-hook target missing (${target})"
+    fi
+  elif [[ -e "${hook_link}" ]]; then
+    fail "${hook_link} exists but is not a symlink — unexpected state"
+  else
+    fail "token-tally-claude-hook not installed at ${hook_link}"
+  fi
+
+  if [[ ! -f "${settings_path}" ]]; then
+    fail "Claude Code settings not found at ${settings_path}"
+  else
+    local settings_status
+    settings_status=$(TT_CC_SETTINGS_PATH="${settings_path}" python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+settings_path = Path(os.environ["TT_CC_SETTINGS_PATH"])
+events = [
+    "SessionStart",
+    "SessionEnd",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "Stop",
+    "SubagentStop",
+]
+try:
+    with settings_path.open() as f:
+        data = json.load(f)
+except Exception as exc:
+    print(f"ERROR:settings JSON could not be parsed: {exc}")
+    raise SystemExit(0)
+
+hooks_root = data.get("hooks") if isinstance(data, dict) else None
+if not isinstance(hooks_root, dict):
+    print("ERROR:settings JSON has no hooks object")
+    raise SystemExit(0)
+
+missing = []
+for event in events:
+    found = False
+    matchers = hooks_root.get(event, [])
+    if isinstance(matchers, list):
+        for matcher in matchers:
+            if not isinstance(matcher, dict):
+                continue
+            hook_entries = matcher.get("hooks", [])
+            if not isinstance(hook_entries, list):
+                continue
+            for hook in hook_entries:
+                if not isinstance(hook, dict):
+                    continue
+                command = hook.get("command")
+                if isinstance(command, str) and command.startswith("token-tally-claude-hook"):
+                    found = True
+    if not found:
+        missing.append(event)
+
+if missing:
+    print("WARN:" + ",".join(missing))
+else:
+    print("OK")
+PY
+)
+    case "${settings_status}" in
+      OK) pass "Claude Code settings contain all ToTally hooks" ;;
+      WARN:*) warn "Claude Code settings missing ToTally hooks: ${settings_status#WARN:}" ;;
+      ERROR:*) fail "${settings_status#ERROR:}" ;;
+      *) warn "Unexpected Claude Code settings check output: ${settings_status}" ;;
+    esac
+  fi
+
+  local db_path="${TOKEN_TALLY_DATA_DIR}/events.db"
+  if [[ -f "${db_path}" ]] && command -v sqlite3 &>/dev/null; then
+    local count
+    count=$(sqlite3 "${db_path}" "SELECT COUNT(*) FROM harnesses WHERE name='claude-code';" 2>/dev/null) || count="0"
+    if [[ "${count}" == "0" ]]; then
+      warn "No claude-code rows seen yet in ${db_path}; run a Claude Code session to populate data"
+    else
+      pass "claude-code harness row present in database"
+    fi
+  fi
+
+  local state_dir="${TOKEN_TALLY_STATE_DIR}/claude-code"
+  if [[ -d "${state_dir}" ]]; then
+    local stale_count
+    stale_count=$(find "${state_dir}" -type f -name '*.json' -mtime +30 2>/dev/null | wc -l | tr -d ' ')
+    if [[ "${stale_count}" != "0" ]]; then
+      warn "${stale_count} stale Claude Code state file(s) older than 30 days in ${state_dir}"
+    fi
+  fi
+}
+
 check_manifest() {
   section "Install manifest"
   if [[ ! -f "${MANIFEST_PATH}" ]]; then
@@ -181,6 +304,7 @@ main() {
   check_store_cli
   check_tray
   check_pi_extensions
+  check_claude_code
   check_manifest
 
   # Summary

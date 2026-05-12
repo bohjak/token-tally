@@ -165,11 +165,25 @@ aggregations. It is a diagnostic and forward-compatibility table only.
 | Config | `~/.config/token-tally/config.json` |
 | Install manifest | `~/.config/token-tally/install.json` |
 | State / logs | `~/.local/state/token-tally/logs/` |
+| Claude Code hook state | `~/.local/state/token-tally/claude-code/` |
 | NDJSON spool | `~/.local/share/token-tally/spool/` |
 
 XDG environment variables (`$XDG_DATA_HOME`, `$XDG_CONFIG_HOME`,
 `$XDG_STATE_HOME`) override the `~/.local/share`, `~/.config`, and
 `~/.local/state` prefixes respectively.
+
+### Claude Code hook state
+
+Claude Code hooks run as separate short-lived processes, so the writer keeps a
+small per-session state file under `~/.local/state/token-tally/claude-code/`.
+These files contain only bookkeeping such as transcript line offsets, turn
+counters, active tool IDs, and the ToTally-internal session ID. They do **not**
+contain prompts, assistant text, tool inputs, tool outputs, file contents, or
+environment variables.
+
+It is safe to delete this directory. The next Claude Code hook invocation will
+recreate state as needed; at worst, a transcript may be scanned from the
+beginning and idempotent upserts will prevent duplicate rows.
 
 ### NDJSON spool
 

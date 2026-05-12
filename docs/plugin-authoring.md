@@ -334,3 +334,77 @@ extension slugs.
 8. Add an `install-<harness>.sh` component script and wire it into
    `scripts/install.sh`.
 9. Document the integration in this file under a new harness-specific section.
+
+---
+
+## Claude Code integration
+
+The Claude Code writer lives at `harnesses/claude-code/writer/` and builds a
+Node hook command named `token-tally-claude-hook`. Unlike the Pi writer, Claude
+Code does not load a long-lived extension process. It executes hook commands as
+short-lived subprocesses and sends each hook payload as JSON on stdin.
+
+### Installed hooks
+
+`make install` runs `scripts/install-claude-code.sh` when `~/.claude/` exists.
+The script builds the writer, symlinks:
+
+```text
+~/.local/bin/token-tally-claude-hook
+  -> <repo>/harnesses/claude-code/writer/dist/bin/token-tally-claude-hook.js
+```
+
+and merges ToTally-owned commands into `~/.claude/settings.json` for these
+Claude Code hook events:
+
+- `SessionStart`
+- `SessionEnd`
+- `UserPromptSubmit`
+- `PreToolUse`
+- `PostToolUse`
+- `Stop`
+- `SubagentStop`
+
+The merge is idempotent. Existing settings are preserved and the previous file
+is backed up before the first modification in an install run.
+
+### Transcript drain strategy
+
+Claude Code hook payloads identify the session (`session_id`), working
+directory (`cwd`), and transcript file (`transcript_path`), but they do not
+include token counts or costs. The writer therefore incrementally reads the
+JSONL transcript at `transcript_path`, extracts assistant entries with
+`message.usage`, and records them as `llm_messages` rows.
+
+A per-session state file under `~/.local/state/token-tally/claude-code/` tracks
+only the transcript offset, current turn, active tool IDs, and ToTally-internal
+row IDs. It never stores prompts, responses, tool inputs, tool outputs, file
+contents, or environment variables.
+
+### Cost and subscriptions
+
+The writer computes list-price costs from the static Anthropic pricing table at
+`harnesses/claude-code/writer/src/pricing/models.ts` and records
+`cost_source = 'writer'`. If a transcript entry contains a legacy `costUSD`
+field, the writer treats that as harness-provided cost and records
+`cost_source = 'harness'`.
+
+Claude Pro/Max subscription accounting is opt-in because Claude Code hook
+payloads do not reliably expose the active billing plan. Configure it in
+`~/.config/token-tally/config.json`:
+
+```json
+{
+  "harnesses": {
+    "claude-code": {
+      "subscription": "claude-pro",
+      "subscriptionFixedCostUSD": 20,
+      "subscriptionStartDay": 1
+    }
+  }
+}
+```
+
+When configured, each computed message is linked to the current monthly
+subscription period and recorded with `cost_source = 'subscription_covered'`.
+The cost columns still hold the PAYG list-price equivalent.
