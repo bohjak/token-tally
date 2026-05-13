@@ -1,0 +1,16 @@
+{
+  "_readme": "ToTally — Cursor hook template. This file shows the hooks block to merge into ~/.cursor/hooks.json. Do NOT replace your entire hooks.json with this file — the installer merges only the 'hooks' entries that belong to ToTally. If you already have hooks for an event, the installer appends a new entry to that event's array. Cursor uses lower-camel event names and flat { \"command\": \"...\" } entries — this format is NOT the same as Claude Code's nested settings.json format.",
+  "version": 1,
+  "hooks": {
+    "sessionStart": [{ "command": "token-tally-cursor-hook" }],
+    "sessionEnd": [{ "command": "token-tally-cursor-hook" }],
+    "beforeSubmitPrompt": [{ "command": "token-tally-cursor-hook" }],
+    "afterAgentResponse": [{ "command": "token-tally-cursor-hook" }],
+    "preToolUse": [{ "command": "token-tally-cursor-hook" }],
+    "postToolUse": [{ "command": "token-tally-cursor-hook" }],
+    "postToolUseFailure": [{ "command": "token-tally-cursor-hook" }],
+    "stop": [{ "command": "token-tally-cursor-hook" }],
+    "subagentStop": [{ "command": "token-tally-cursor-hook" }],
+    "preCompact": [{ "command": "token-tally-cursor-hook" }]
+  }
+}

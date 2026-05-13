@@ -357,7 +357,18 @@ run_safe_checks() {
     warn "token-tally-usage symlink absent at ${usage_link} (run 'make install' to create it)"
   fi
 
-  # ---- 10. Uninstall --help exits cleanly ----
+  # ---- 10. Cursor hook symlink ----
+  section "Cursor hook symlink"
+  local cursor_hook_link="${HOME}/.local/bin/token-tally-cursor-hook"
+  if [[ -L "${cursor_hook_link}" ]]; then
+    local cursor_hook_target
+    cursor_hook_target=$(readlink "${cursor_hook_link}")
+    pass "token-tally-cursor-hook symlink → ${cursor_hook_target}"
+  else
+    warn "token-tally-cursor-hook symlink absent at ${cursor_hook_link} (run 'make install' with Cursor present to create it)"
+  fi
+
+  # ---- 11. Uninstall --help exits cleanly ----
   section "Uninstall script sanity"
   if "${SCRIPT_DIR}/uninstall.sh" --help >/dev/null 2>&1; then
     pass "uninstall.sh --help exits 0"
@@ -433,7 +444,66 @@ run_real_checks() {
     fail "token-tally-usage symlink not found at ${usage_link}"
   fi
 
-  # ---- 5. make doctor ----
+  # ---- 5. Cursor integration ----
+  # Skip silently when ~/.cursor is absent — the installer reports "skipped"
+  # in that case and no hooks.json or symlink are created.
+  section "Cursor integration"
+  local cursor_hook_link_real="${HOME}/.local/bin/token-tally-cursor-hook"
+  local cursor_hooks_json_real="${HOME}/.cursor/hooks.json"
+  if [[ ! -d "${HOME}/.cursor" ]]; then
+    warn "~/.cursor not found — Cursor integration was skipped during install (expected)"
+  else
+    # Verify the binary symlink points to the correct repo target.
+    if [[ -L "${cursor_hook_link_real}" ]]; then
+      local cursor_target_real
+      cursor_target_real=$(readlink "${cursor_hook_link_real}")
+      local expected_cursor_target="${REPO_ROOT}/harnesses/cursor/writer/dist/bin/token-tally-cursor-hook.js"
+      if [[ "${cursor_target_real}" == "${expected_cursor_target}" ]]; then
+        pass "token-tally-cursor-hook → correct repo path"
+      else
+        fail "token-tally-cursor-hook → ${cursor_target_real} (expected ${expected_cursor_target})"
+      fi
+    else
+      fail "token-tally-cursor-hook symlink not found at ${cursor_hook_link_real}"
+    fi
+
+    # Verify hooks.json contains flat token-tally-cursor-hook entries for all
+    # 10 expected agent-hook event names. Uses python3 (already required by
+    # the install scripts) rather than jq to avoid a new prerequisite.
+    if [[ -f "${cursor_hooks_json_real}" ]]; then
+      local cursor_missing_events
+      cursor_missing_events=$(TT_HOOKS_PATH="${cursor_hooks_json_real}" python3 - <<'PY'
+import json, os
+with open(os.environ["TT_HOOKS_PATH"]) as f:
+    data = json.load(f)
+hooks = data.get("hooks", {})
+expected = [
+    "sessionStart", "sessionEnd", "beforeSubmitPrompt", "afterAgentResponse",
+    "preToolUse", "postToolUse", "postToolUseFailure", "stop", "subagentStop", "preCompact",
+]
+missing = [
+    ev for ev in expected
+    if not any(
+        isinstance(h, dict) and "token-tally-cursor-hook" in h.get("command", "")
+        for h in hooks.get(ev, [])
+    )
+]
+print(",".join(missing))
+PY
+      ) || cursor_missing_events="error"
+      if [[ "${cursor_missing_events}" == "" ]]; then
+        pass "hooks.json: all 10 expected events have flat token-tally-cursor-hook entries"
+      elif [[ "${cursor_missing_events}" == "error" ]]; then
+        fail "hooks.json: could not parse ${cursor_hooks_json_real}"
+      else
+        fail "hooks.json: missing token-tally-cursor-hook entries for: ${cursor_missing_events}"
+      fi
+    else
+      fail "~/.cursor/hooks.json not found after install"
+    fi
+  fi
+
+  # ---- 6. make doctor ----
   section "make doctor"
   if make -C "${REPO_ROOT}" doctor; then
     pass "make doctor: passed"
@@ -470,6 +540,40 @@ run_real_checks() {
     pass "token-tally-usage symlink removed by uninstall"
   else
     fail "token-tally-usage symlink still present after uninstall"
+  fi
+
+  # Cursor cleanup — only verify if ~/.cursor was present (was installed).
+  if [[ -d "${HOME}/.cursor" ]]; then
+    if [[ ! -L "${cursor_hook_link_real}" ]]; then
+      pass "token-tally-cursor-hook symlink removed by uninstall"
+    else
+      fail "token-tally-cursor-hook symlink still present after uninstall"
+    fi
+
+    if [[ -f "${cursor_hooks_json_real}" ]]; then
+      local cursor_remaining
+      cursor_remaining=$(TT_HOOKS_PATH="${cursor_hooks_json_real}" python3 - <<'PY'
+import json, os
+with open(os.environ["TT_HOOKS_PATH"]) as f:
+    data = json.load(f)
+hooks = data.get("hooks", {})
+found = sum(
+    1 for entries in hooks.values()
+    if isinstance(entries, list)
+    for h in entries
+    if isinstance(h, dict) and "token-tally-cursor-hook" in h.get("command", "")
+)
+print(found)
+PY
+      ) || cursor_remaining="error"
+      if [[ "${cursor_remaining}" == "0" ]]; then
+        pass "hooks.json: no token-tally-cursor-hook entries remain after uninstall"
+      elif [[ "${cursor_remaining}" == "error" ]]; then
+        warn "hooks.json: could not verify cleanup after uninstall"
+      else
+        fail "hooks.json: ${cursor_remaining} token-tally-cursor-hook entries still present after uninstall"
+      fi
+    fi
   fi
 
   # Confirm user data is NOT purged by default uninstall

@@ -1,0 +1,1 @@
+{"hook_event_name":"postToolUseFailure","conversation_id":"cursor-conv-001","generation_id":"cursor-gen-001","model":"claude-sonnet-4-20250514","cursor_version":"1.7.5","workspace_roots":["/tmp"],"cwd":"/tmp","tool_name":"Shell","tool_use_id":"cursor-tool-002","error_message":"Command timed out after 30s","failure_type":"timeout","duration":30000}

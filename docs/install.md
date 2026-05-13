@@ -29,8 +29,17 @@ cd token-tally
 make install
 ```
 
-The installer is a thin Make target that calls `scripts/install.sh`. It runs
-each component in order:
+The installer is a thin Make target that calls `scripts/install.sh`. When run
+from a terminal it first shows an interactive component picker so you can review
+what will be installed and skip optional integrations. Use arrow keys to move,
+Space to toggle an optional component, and Enter to install the selected set.
+
+For unattended installs, run `scripts/install.sh --all` (or set
+`TOKEN_TALLY_INSTALL_NO_TUI=1`) to skip the picker and use the default component
+set. Non-interactive shells do the same. Optional harness integrations are not
+offered or installed when their harness is not detected.
+
+The installer then runs each selected component in order:
 
 1. **Store & CLI** — installs pnpm workspace dependencies, builds the
    `@token-tally/store` TypeScript package, links the `token-tally` binary
@@ -43,25 +52,34 @@ each component in order:
    `/Applications/ToTally.app`, and launches it. The app registers itself as a
    login item on first launch (see [Launch at login](#launch-at-login)).
 
-3. **Pi integration** (optional) — if `~/.pi` exists, creates two symlinks
+3. **Pi integration** (optional) — if Pi is detected, creates two symlinks
    under `~/.pi/agent/extensions/`:
    - `token-tally-writer` → `<repo>/harnesses/pi/writer-extension`
    - `token-tally-usage` → `<repo>/clients/pi-usage-command`
 
    Pi is not required. The tray app and CLI work independently of any harness.
 
-4. **Claude Code integration** (optional) — if `~/.claude` exists, builds the
+4. **Claude Code integration** (optional) — if Claude Code is detected, builds the
    Claude Code writer, symlinks `~/.local/bin/token-tally-claude-hook` to the
    compiled hook binary, and merges ToTally-owned hook commands into
    `~/.claude/settings.json`. The installer backs up an existing settings file
    before modifying it and preserves all non-ToTally hooks and settings.
 
-5. **Manifest** — writes `~/.config/token-tally/install.json` with the
+5. **Cursor integration** (optional) — if Cursor is detected, builds the
+   Cursor writer, symlinks `~/.local/bin/token-tally-cursor-hook` to the
+   compiled hook binary, and merges ToTally-owned hook commands into
+   `~/.cursor/hooks.json`. Cursor uses lower-camel event names and flat hook
+   entries — the installer writes the native Cursor config shape, not the
+   Claude Code settings format. The installer backs up an existing
+   `hooks.json` before modifying it and preserves all non-ToTally hooks.
+
+6. **Manifest** — writes `~/.config/token-tally/install.json` with the
    repo path, component status, database path, and schema version.
 
-A failure in step 1 (store) aborts the run — it is the foundation. Failures in
-steps 2, 3, or 4 are reported and printed, but the other components still
-complete.
+A failure in step 1 (store) aborts the run — it is the foundation and is always
+installed. Failures in steps 2, 3, or 4 are reported and printed, but the other
+selected components still complete. Skipped optional components are recorded as
+not installed in the install summary and manifest.
 
 ### Gatekeeper and unsigned app
 
@@ -85,6 +103,7 @@ You only need to do this once.
 ~/.config/token-tally/                # config and install manifest
 ~/.local/state/token-tally/logs/      # log files
 ~/.local/state/token-tally/claude-code/ # Claude Code hook offsets/counters
+~/.local/state/token-tally/cursor/    # Cursor hook session state files
 ```
 
 Where `$XDG_DATA_HOME`, `$XDG_CONFIG_HOME`, or `$XDG_STATE_HOME` are set, those
@@ -108,6 +127,7 @@ The installer is fully idempotent:
 - the tray app is rebuilt and reinstalled (a running instance is stopped first)
 - extension symlinks are verified and recreated if pointing elsewhere
 - Claude Code hook settings are re-merged idempotently
+- Cursor hook settings are re-merged idempotently
 - the install manifest is updated with the new `updatedAt` timestamp
 
 There is no separate `make update` command.
@@ -127,14 +147,16 @@ Checks:
 - `/Applications/ToTally.app` is installed and matches the manifest version
 - Pi extension symlinks exist and point to the repo (skipped if Pi is absent)
 - Claude Code hook symlink and settings entries are present (skipped with warnings if Claude Code is absent)
+- Cursor hook symlink and `hooks.json` entries are present (skipped with warnings if Cursor is absent)
 - Install manifest is present
 
 ```sh
 make test
 ```
 
-Runs the store test suite, the Claude Code writer test suite, and the Swift
-tray test suite (`swift test --package-path clients/macos-tray`).
+Runs the store test suite, the Claude Code writer test suite, the Cursor
+writer test suite, and the Swift tray test suite
+(`swift test --package-path clients/macos-tray`).
 
 ---
 
@@ -219,6 +241,8 @@ Default behaviour:
 - Removes Pi extension symlinks `~/.pi/agent/extensions/token-tally-*`.
 - Removes the Claude Code hook symlink and ToTally-owned entries from
   `~/.claude/settings.json`.
+- Removes the Cursor hook symlink and ToTally-owned entries from
+  `~/.cursor/hooks.json`.
 - Removes the install manifest `~/.config/token-tally/install.json`.
 - **Prints** the paths of user data but does **not** delete them.
 - **Never touches** `~/.pi/analytics/events.db`.
@@ -226,9 +250,10 @@ Default behaviour:
 ### Keeping specific components
 
 ```sh
-scripts/uninstall.sh --keep-app      # skip tray app removal
-scripts/uninstall.sh --keep-pi       # skip Pi extension removal
+scripts/uninstall.sh --keep-app          # skip tray app removal
+scripts/uninstall.sh --keep-pi           # skip Pi extension removal
 scripts/uninstall.sh --keep-claude-code  # skip Claude Code hook removal
+scripts/uninstall.sh --keep-cursor       # skip Cursor hook removal
 ```
 
 ### Removing analytics data (purge)
@@ -307,6 +332,8 @@ swift test  --package-path clients/macos-tray
 | `/Applications/ToTally.app` | macOS tray app |
 | `~/.pi/agent/extensions/token-tally-writer` | Pi writer extension symlink |
 | `~/.pi/agent/extensions/token-tally-usage` | Pi usage client symlink |
+| `~/.local/bin/token-tally-cursor-hook` | Cursor hook binary symlink |
+| `~/.local/state/token-tally/cursor/` | Cursor hook per-session state files |
 
 All paths honour the `$XDG_DATA_HOME`, `$XDG_CONFIG_HOME`, and
 `$XDG_STATE_HOME` environment variables as prefixes where set.

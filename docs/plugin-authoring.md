@@ -408,3 +408,159 @@ payloads do not reliably expose the active billing plan. Configure it in
 When configured, each computed message is linked to the current monthly
 subscription period and recorded with `cost_source = 'subscription_covered'`.
 The cost columns still hold the PAYG list-price equivalent.
+
+---
+
+## Cursor integration
+
+The Cursor writer lives at `harnesses/cursor/writer/` and builds a Node hook
+command named `token-tally-cursor-hook`. Like the Claude Code writer, it runs
+as a short-lived subprocess per hook event, receiving the payload as JSON on
+stdin.
+
+### Installed hooks
+
+`make install` runs `scripts/install-cursor.sh` when Cursor is detected.
+The script builds the writer, symlinks:
+
+```text
+~/.local/bin/token-tally-cursor-hook
+  -> <repo>/harnesses/cursor/writer/dist/bin/token-tally-cursor-hook.js
+```
+
+and merges ToTally-owned commands into `~/.cursor/hooks.json` for these
+Cursor hook events:
+
+- `sessionStart`
+- `sessionEnd`
+- `beforeSubmitPrompt`
+- `afterAgentResponse`
+- `preToolUse`
+- `postToolUse`
+- `postToolUseFailure`
+- `stop`
+- `subagentStop`
+- `preCompact`
+
+The merge is idempotent. Existing settings are preserved and the previous file
+is backed up before the first modification in an install run.
+
+### Native config shape
+
+Cursor's `~/.cursor/hooks.json` uses **lower-camel event names** and **flat
+hook entries** — this is different from Claude Code's nested
+`{ "hooks": [{ "type": "command", ... }] }` format. A ToTally-owned entry
+looks like:
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "afterAgentResponse": [{ "command": "token-tally-cursor-hook" }],
+    "preToolUse":         [{ "command": "token-tally-cursor-hook" }]
+  }
+}
+```
+
+Do not copy the Claude Code `settings.json` shape into `hooks.json`.
+
+### Payload identity fields
+
+Cursor hook payloads use different identity fields than Claude Code:
+
+| Field | Description |
+|---|---|
+| `conversation_id` | Stable ID for the session across all turns. Present on most agent hooks. |
+| `generation_id` | Changes with every user message; used as the turn/message correlation ID. |
+| `session_id` | Documented only on `sessionStart` / `sessionEnd`; equivalent to `conversation_id`. |
+| `model` | Model configured for the composer at hook time. |
+| `transcript_path` | Path to the conversation transcript file, when transcripts are enabled. |
+
+The writer maps these to ToTally IDs using these rules:
+
+- `harness_session_id = conversation_id ?? session_id` — if neither is present
+  the event is silently ignored.
+- `harness_turn_id = generation_id` when present; otherwise synthesized from
+  a per-session counter.
+- `harness_message_id = cursor:<conversation_id>:<generation_id>:assistant`
+  for `afterAgentResponse` when both fields exist; otherwise synthesized from
+  a session message counter.
+- `harness_tool_call_id = tool_use_id` when present; otherwise synthesized
+  from the session id, turn id, and a per-turn tool counter.
+
+### Token and cost handling
+
+Cursor hook payloads do not include per-message token counts. The writer
+therefore records `afterAgentResponse` as a zero-token placeholder with
+`cost_source = 'unknown'` immediately, then best-effort backfills token and
+model information on `stop` and `sessionEnd` in this order:
+
+1. **Transcript** — if `transcript_path` is present and readable, the writer
+   inspects it first. If the transcript contains stable message IDs and usable
+   token metadata, this is the preferred source.
+2. **Private SQLite fallback** — if transcript data is unavailable, the writer
+   reads Cursor's `state.vscdb` (`cursorDiskKV` table, opened read-only with
+   `query_only=1`) for token counts stored per bubble. This is experimental:
+   counts are often zero in practice. Platform-specific paths:
+
+   | Platform | Path |
+   |---|---|
+   | macOS | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` |
+   | Linux | `~/.config/Cursor/User/globalStorage/state.vscdb` |
+   | Windows | `%APPDATA%/Cursor/User/globalStorage/state.vscdb` |
+
+   If the file is absent, locked, or on an unsupported platform, the writer
+   skips the backfill — missing private state is never treated as an error.
+
+After backfill, `cost_source` is set as follows:
+
+- Tokens present and model resolves in the shared pricing table →
+  `cost_source = 'writer'`
+- Subscription configured and tokens resolved →
+  `cost_source = 'subscription_covered'`, cost columns hold the PAYG
+  list-price equivalent
+- Otherwise → `cost_source = 'unknown'`, cost columns remain `0`
+
+The backfill upserts are idempotent — re-running `stop` for the same session
+never creates duplicate rows.
+
+### Raw event capture
+
+Raw capture is **off by default**. The only eligible event is `preCompact`,
+which carries the context window token count and window size. When
+`captureRaw` is enabled, the writer emits a single minimal raw event with
+only `context_tokens` and `context_window_size` — never prompt text or
+response content. Enable it in `~/.config/token-tally/config.json`:
+
+```json
+{
+  "harnesses": {
+    "cursor": {
+      "captureRaw": true
+    }
+  }
+}
+```
+
+### Subscriptions
+
+Cursor Pro subscription tracking is opt-in. Configure it in
+`~/.config/token-tally/config.json`:
+
+```json
+{
+  "harnesses": {
+    "cursor": {
+      "subscription": "cursor-pro",
+      "subscriptionFixedCostUSD": 20,
+      "subscriptionStartDay": 1,
+      "captureRaw": false
+    }
+  }
+}
+```
+
+When configured, each backfilled message is linked to the active monthly
+subscription period and recorded with `cost_source = 'subscription_covered'`.
+The cost columns still hold the PAYG list-price equivalent. Mirrors Claude
+Code subscription behaviour exactly.

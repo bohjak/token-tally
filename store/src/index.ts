@@ -37,3 +37,7 @@ export type {
   LegacyImportResult,
   TableImportStats,
 } from "./importers/legacy-pi";
+
+// T1 (Cursor) — shared multi-provider pricing
+export { lookupRates, computeCostMicros } from "./pricing/index";
+export type { ModelRates, CostBreakdown, CostInput } from "./pricing/index";

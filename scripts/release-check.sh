@@ -107,6 +107,7 @@ check_typecheck() {
   local packages=(
     "store"
     "harnesses/pi/writer-extension"
+    "harnesses/cursor/writer"
     "clients/pi-usage-command"
   )
 
@@ -192,6 +193,57 @@ check_shellcheck() {
   fi
 }
 
+check_pricing() {
+  section "Pricing table drift check"
+
+  if ! command -v pnpm &>/dev/null; then
+    warn "pnpm not found — skipping pricing drift check"
+    return
+  fi
+
+  if [[ ! -f "${REPO_ROOT}/scripts/generate-pricing.ts" ]]; then
+    warn "scripts/generate-pricing.ts not found — skipping pricing drift check"
+    return
+  fi
+
+  # --check fails when rates.json is out of sync with sources/ OR when any
+  # source file has an asOf date older than 180 days.
+  if (cd "${REPO_ROOT}" && pnpm exec tsx scripts/generate-pricing.ts --check 2>&1); then
+    pass "pricing: rates.json is up to date and all sources are fresh"
+  else
+    fail "pricing: rates.json is out of sync or sources are stale. " \
+      "Run 'pnpm exec tsx scripts/generate-pricing.ts' to regenerate and update asOf dates."
+  fi
+}
+
+check_cursor_writer_tests() {
+  section "Cursor writer tests"
+
+  if ! command -v pnpm &>/dev/null; then
+    warn "pnpm not found — skipping Cursor writer tests"
+    return
+  fi
+
+  local cursor_writer_dir="${REPO_ROOT}/harnesses/cursor/writer"
+  if [[ ! -f "${cursor_writer_dir}/package.json" ]]; then
+    warn "Cursor writer package not found at harnesses/cursor/writer — skipping"
+    return
+  fi
+
+  # Build first so compiled .js test files are current. A missing main.ts
+  # (expected until T4 is implemented) will surface as a build failure here.
+  if ! (cd "${REPO_ROOT}" && pnpm --filter @token-tally/cursor-writer build 2>&1); then
+    fail "Cursor writer: build failed — cannot run tests (T4 likely not yet implemented)"
+    return
+  fi
+
+  if (cd "${REPO_ROOT}" && pnpm --filter @token-tally/cursor-writer test 2>&1); then
+    pass "Cursor writer tests: all passed"
+  else
+    fail "Cursor writer tests: one or more tests failed"
+  fi
+}
+
 check_perf() {
   section "Performance fixture + Swift performance tests"
 
@@ -267,6 +319,8 @@ main() {
   check_swift_build
   check_swift_tests
   check_shellcheck
+  check_pricing
+  check_cursor_writer_tests
   check_perf
 
   print_summary

@@ -6,6 +6,7 @@
 #   - Remove /Applications/ToTally.app (if manifest-tracked or present).
 #   - Remove Pi extension symlinks under ~/.pi/agent/extensions/token-tally-*.
 #   - Remove the Claude Code hook symlink and ToTally-owned settings entries.
+#   - Remove the Cursor hook symlink and ToTally-owned hooks.json entries.
 #   - Remove the install manifest (~/.config/token-tally/install.json).
 #   - Print paths of user data (DB, spool, logs) but DO NOT delete them.
 #   - Leave ~/.pi/analytics/events.db (legacy Pi DB) untouched.
@@ -19,6 +20,7 @@
 #   --keep-pi      Skip Pi extension removal.
 #   --keep-claude-code
 #                  Skip Claude Code hook removal.
+#   --keep-cursor  Skip Cursor hook removal.
 #   --keep-data    Alias for not passing --purge (default; explicit opt-out).
 set -euo pipefail
 
@@ -58,6 +60,7 @@ OPT_YES=false
 OPT_KEEP_APP=false
 OPT_KEEP_PI=false
 OPT_KEEP_CLAUDE_CODE=false
+OPT_KEEP_CURSOR=false
 
 parse_args() {
   while [[ $# -gt 0 ]]; do
@@ -67,9 +70,10 @@ parse_args() {
       --keep-app)  OPT_KEEP_APP=true ;;
       --keep-pi)   OPT_KEEP_PI=true ;;
       --keep-claude-code) OPT_KEEP_CLAUDE_CODE=true ;;
+      --keep-cursor) OPT_KEEP_CURSOR=true ;;
       --keep-data) OPT_PURGE=false ;;
       --help|-h)
-        echo "Usage: scripts/uninstall.sh [--purge [--yes]] [--keep-app] [--keep-pi] [--keep-claude-code]"
+        echo "Usage: scripts/uninstall.sh [--purge [--yes]] [--keep-app] [--keep-pi] [--keep-claude-code] [--keep-cursor]"
         echo
         echo "Flags:"
         echo "  --purge              Also delete ToTally user data (DB, spool, logs)"
@@ -77,6 +81,7 @@ parse_args() {
         echo "  --keep-app           Skip removing /Applications/ToTally.app"
         echo "  --keep-pi            Skip removing Pi extension symlinks"
         echo "  --keep-claude-code   Skip removing Claude Code hooks"
+        echo "  --keep-cursor        Skip removing Cursor hooks"
         exit 0
         ;;
       *)
@@ -241,6 +246,85 @@ PY
   info "Removed ToTally Claude Code hooks from ${settings_path}"
 }
 
+# Remove Cursor hook symlink and ToTally-owned hooks.json entries.
+#
+# Cursor's hooks.json uses lower-camel event names with flat entry arrays:
+#   { "version": 1, "hooks": { "sessionStart": [{"command": "..."}] } }
+# We filter out entries whose "command" field contains "token-tally-cursor-hook".
+remove_cursor_hooks() {
+  local hook_link="${HOME}/.local/bin/token-tally-cursor-hook"
+  local hooks_path="${HOME}/.cursor/hooks.json"
+
+  # Remove the hook binary symlink if it points into this repo.
+  if [[ -L "${hook_link}" ]]; then
+    local target
+    target=$(readlink "${hook_link}")
+    if [[ "${target}" == "${REPO_ROOT}"/* ]]; then
+      rm "${hook_link}"
+      info "Removed symlink ${hook_link}"
+    else
+      warn "${hook_link} points outside this repo (${target}) — leaving in place"
+    fi
+  elif [[ -e "${hook_link}" ]]; then
+    warn "${hook_link} exists but is not a symlink — leaving in place"
+  else
+    info "Cursor hook symlink not found — nothing to remove"
+  fi
+
+  if [[ ! -f "${hooks_path}" ]]; then
+    info "Cursor hooks.json not found — nothing to edit"
+    return
+  fi
+
+  TT_CURSOR_HOOKS_PATH="${hooks_path}" python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+hooks_path = Path(os.environ["TT_CURSOR_HOOKS_PATH"])
+try:
+    with hooks_path.open() as f:
+        data = json.load(f)
+except json.JSONDecodeError as exc:
+    raise SystemExit(f"hooks.json is malformed: {exc}")
+
+if not isinstance(data, dict):
+    raise SystemExit("hooks.json root must be an object")
+
+hooks_root = data.get("hooks")
+if not isinstance(hooks_root, dict):
+    # No hooks object — nothing to remove.
+    raise SystemExit(0)
+
+def owned(command: object) -> bool:
+    """True when an entry command belongs to ToTally's Cursor hook."""
+    return isinstance(command, str) and "token-tally-cursor-hook" in command
+
+changed = False
+for event in list(hooks_root.keys()):
+    entries = hooks_root.get(event)
+    if not isinstance(entries, list):
+        continue
+    filtered = [
+        e for e in entries
+        if not (isinstance(e, dict) and owned(e.get("command")))
+    ]
+    if len(filtered) != len(entries):
+        changed = True
+    if filtered:
+        hooks_root[event] = filtered
+    else:
+        # Drop the event key entirely when no non-ToTally entries remain.
+        del hooks_root[event]
+
+if changed:
+    with hooks_path.open("w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+PY
+  info "Removed ToTally Cursor hooks from ${hooks_path}"
+}
+
 # Remove the install manifest.
 remove_manifest() {
   if [[ -f "${MANIFEST_PATH}" ]]; then
@@ -311,6 +395,14 @@ main() {
     remove_claude_code_hooks
   else
     info "Skipping Claude Code hook removal (--keep-claude-code)"
+  fi
+
+  # ---- Cursor ----
+  section "Cursor hooks"
+  if [[ "${OPT_KEEP_CURSOR}" == "false" ]]; then
+    remove_cursor_hooks
+  else
+    info "Skipping Cursor hook removal (--keep-cursor)"
   fi
 
   # ---- Manifest ----

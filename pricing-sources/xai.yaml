@@ -1,0 +1,52 @@
+# xAI (Grok) model pricing — curated source of truth.
+#
+# All rates are USD per one million tokens (MTok) at xAI list price.
+# xAI does not offer prompt caching at this time; cache fields are 0.
+#
+# Source: https://x.ai/api
+
+provider: xai
+asOf: "2026-05-13"
+sourceUrl: "https://x.ai/api"
+
+models:
+  - id: grok-2
+    aliases:
+      - grok-2-1212
+      - grok-2-latest
+    inputPerMTokUSD: 2
+    outputPerMTokUSD: 10
+    cacheReadPerMTokUSD: 0
+    cacheWritePerMTokUSD: 0
+
+  - id: grok-2-vision
+    aliases:
+      - grok-2-vision-1212
+    inputPerMTokUSD: 2
+    outputPerMTokUSD: 10
+    cacheReadPerMTokUSD: 0
+    cacheWritePerMTokUSD: 0
+
+  - id: grok-2-mini
+    aliases:
+      - grok-2-mini-1212
+    inputPerMTokUSD: 0.2
+    outputPerMTokUSD: 0.4
+    cacheReadPerMTokUSD: 0
+    cacheWritePerMTokUSD: 0
+
+  - id: grok-3
+    aliases:
+      - grok-3-latest
+    inputPerMTokUSD: 3
+    outputPerMTokUSD: 15
+    cacheReadPerMTokUSD: 0
+    cacheWritePerMTokUSD: 0
+
+  - id: grok-3-mini
+    aliases:
+      - grok-3-mini-latest
+    inputPerMTokUSD: 0.3
+    outputPerMTokUSD: 0.5
+    cacheReadPerMTokUSD: 0
+    cacheWritePerMTokUSD: 0

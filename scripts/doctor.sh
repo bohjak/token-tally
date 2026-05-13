@@ -7,7 +7,8 @@
 #   3. Pi extensions:   ~/.pi/agent/extensions/token-tally-{writer,usage} point
 #                       to the correct repo paths.
 #   4. Claude Code:     hook binary and ~/.claude/settings.json entries.
-#   5. Install manifest: present and parseable.
+#   5. Cursor hooks:    hook binary and ~/.cursor/hooks.json entries.
+#   6. Install manifest: present and parseable.
 #
 # Legacy Pi data is not checked here; use 'token-tally import legacy-pi'
 # to migrate it into the central store.
@@ -271,6 +272,125 @@ PY
   fi
 }
 
+check_cursor() {
+  section "Cursor hooks"
+
+  local cursor_dir="${HOME}/.cursor"
+  local hook_link="${HOME}/.local/bin/token-tally-cursor-hook"
+  local hooks_path="${cursor_dir}/hooks.json"
+
+  if [[ ! -d "${cursor_dir}" ]]; then
+    warn "Cursor config directory not found (${cursor_dir})"
+    warn "Install or run Cursor first, then re-run 'make install'"
+    return
+  fi
+
+  # Check the hook binary symlink.
+  if [[ -L "${hook_link}" ]]; then
+    local target
+    target=$(readlink "${hook_link}")
+    if [[ ! -e "${target}" ]]; then
+      fail "token-tally-cursor-hook target missing (${target})"
+    elif [[ ! -x "${target}" ]]; then
+      fail "token-tally-cursor-hook target is not executable (${target})"
+      fail "  Run 'make install' to repair permissions."
+    else
+      pass "token-tally-cursor-hook symlink ok (→ ${target})"
+    fi
+  elif [[ -e "${hook_link}" ]]; then
+    fail "${hook_link} exists but is not a symlink — unexpected state"
+  else
+    fail "token-tally-cursor-hook not installed at ${hook_link}"
+  fi
+
+  # Check hooks.json for all 10 expected ToTally events.
+  # Cursor uses lower-camel event names and flat entries:
+  #   { "hooks": { "sessionStart": [{"command": "token-tally-cursor-hook"}] } }
+  if [[ ! -f "${hooks_path}" ]]; then
+    fail "Cursor hooks.json not found at ${hooks_path}"
+  else
+    local hooks_status
+    hooks_status=$(TT_CURSOR_HOOKS_PATH="${hooks_path}" python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+hooks_path = Path(os.environ["TT_CURSOR_HOOKS_PATH"])
+expected_events = [
+    "sessionStart",
+    "sessionEnd",
+    "beforeSubmitPrompt",
+    "afterAgentResponse",
+    "preToolUse",
+    "postToolUse",
+    "postToolUseFailure",
+    "stop",
+    "subagentStop",
+    "preCompact",
+]
+try:
+    with hooks_path.open() as f:
+        data = json.load(f)
+except Exception as exc:
+    print(f"ERROR:hooks.json could not be parsed: {exc}")
+    raise SystemExit(0)
+
+hooks_root = data.get("hooks") if isinstance(data, dict) else None
+if not isinstance(hooks_root, dict):
+    print("ERROR:hooks.json has no hooks object")
+    raise SystemExit(0)
+
+missing = []
+for event in expected_events:
+    entries = hooks_root.get(event, [])
+    found = False
+    if isinstance(entries, list):
+        for entry in entries:
+            if isinstance(entry, dict):
+                command = entry.get("command", "")
+                if isinstance(command, str) and "token-tally-cursor-hook" in command:
+                    found = True
+                    break
+    if not found:
+        missing.append(event)
+
+if missing:
+    print("WARN:" + ",".join(missing))
+else:
+    print("OK")
+PY
+)
+    case "${hooks_status}" in
+      OK) pass "Cursor hooks.json contains all 10 ToTally hook entries" ;;
+      WARN:*) warn "Cursor hooks.json missing ToTally entries for: ${hooks_status#WARN:}" ;;
+      ERROR:*) fail "${hooks_status#ERROR:}" ;;
+      *) warn "Unexpected Cursor hooks.json check output: ${hooks_status}" ;;
+    esac
+  fi
+
+  # Check the database for cursor harness activity.
+  local db_path="${TOKEN_TALLY_DATA_DIR}/events.db"
+  if [[ -f "${db_path}" ]] && command -v sqlite3 &>/dev/null; then
+    local count
+    count=$(sqlite3 "${db_path}" "SELECT COUNT(*) FROM harnesses WHERE name='cursor';" 2>/dev/null) || count="0"
+    if [[ "${count}" == "0" ]]; then
+      warn "No cursor rows seen yet in ${db_path}; run a Cursor session to populate data"
+    else
+      pass "cursor harness row present in database"
+    fi
+  fi
+
+  # Check for stale per-session state files (older than 30 days).
+  local state_dir="${TOKEN_TALLY_STATE_DIR}/cursor"
+  if [[ -d "${state_dir}" ]]; then
+    local stale_count
+    stale_count=$(find "${state_dir}" -type f -name '*.json' -mtime +30 2>/dev/null | wc -l | tr -d ' ')
+    if [[ "${stale_count}" != "0" ]]; then
+      warn "${stale_count} stale Cursor state file(s) older than 30 days in ${state_dir}"
+    fi
+  fi
+}
+
 check_manifest() {
   section "Install manifest"
   if [[ ! -f "${MANIFEST_PATH}" ]]; then
@@ -308,6 +428,7 @@ main() {
   check_tray
   check_pi_extensions
   check_claude_code
+  check_cursor
   check_manifest
 
   # Summary

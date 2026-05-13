@@ -38,13 +38,19 @@ cd token-tally
 make install
 ```
 
-`make install` builds and installs everything:
+`make install` opens an interactive component picker, then builds and installs
+the selected set:
 
-- creates the central database at `~/.local/share/token-tally/events.db`
-- builds and installs `/Applications/ToTally.app`, restarting it if already running
+- always creates the central database at `~/.local/share/token-tally/events.db`
+- optionally builds and installs `/Applications/ToTally.app`, restarting it if already running
 - registers the app as a login item (enabled by default; change in Settings)
-- installs the Pi writer and usage-command extensions (if Pi is present)
-- installs Claude Code hooks (if `~/.claude` is present)
+- optionally installs the Pi writer and usage-command extensions (if Pi is present)
+- optionally installs Claude Code hooks (if Claude Code is detected)
+- optionally installs Cursor hooks (if Cursor is detected)
+
+For unattended installs, run `scripts/install.sh --all` or set
+`TOKEN_TALLY_INSTALL_NO_TUI=1`; optional harness integrations are still skipped
+when their harness is not detected.
 
 Run `make doctor` to confirm everything is healthy.
 
@@ -88,6 +94,7 @@ The installer checks for these and prints a clear error if anything is missing.
 | Pi writer extension | `~/.pi/agent/extensions/token-tally-writer` → `<repo>/harnesses/pi/writer-extension` |
 | Pi usage client | `~/.pi/agent/extensions/token-tally-usage` → `<repo>/clients/pi-usage-command` |
 | Claude Code hook | `~/.local/bin/token-tally-claude-hook` → `<repo>/harnesses/claude-code/writer/dist/bin/token-tally-claude-hook.js` |
+| Cursor hook | `~/.local/bin/token-tally-cursor-hook` → `<repo>/harnesses/cursor/writer/dist/bin/token-tally-cursor-hook.js` |
 | CLI binary | wherever pnpm places global binaries on your system |
 | Install manifest | `~/.config/token-tally/install.json` |
 
@@ -95,7 +102,10 @@ All extension paths are symlinks back to the repo, so `git pull && make install`
 picks up code changes without reinstalling.
 
 > **Pi is optional.** The tray app and CLI work without Pi. The Pi extensions
-> (writer and usage command) are only installed if `~/.pi` exists. See
+> (writer and usage command) are only installed if Pi is detected.
+>
+> **Claude Code and Cursor are optional.** Their hook integrations are only
+> installed when the matching harness is detected. See
 > [`docs/plugin-authoring.md`](docs/plugin-authoring.md) to integrate a
 > different harness.
 
@@ -198,12 +208,19 @@ token-tally/
 
 ---
 
-## Adding more harnesses
+## Supported harnesses
 
-Claude Code, OpenCode, Cursor, and other harnesses are planned for future
-releases. The central store is designed for multi-harness use from day one.
-See [`docs/plugin-authoring.md`](docs/plugin-authoring.md) to write an
-integration for a new harness.
+ToTally currently ships writers for:
+
+| Harness | Integration | Notes |
+|---|---|---|
+| **Pi** | Long-lived writer extension | Full token + cost capture |
+| **Claude Code** | Hook subprocess | Tokens from JSONL transcript; Anthropic pricing table |
+| **Cursor** | Hook subprocess | Sessions/turns/tool calls captured; tokens best-effort (no counts in hook payloads); multi-provider pricing table |
+
+The central store is designed for multi-harness use from day one. See
+[`docs/plugin-authoring.md`](docs/plugin-authoring.md) to write an integration
+for a new harness. OpenCode and other agents are potential future additions.
 
 ---
 

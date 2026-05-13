@@ -1,0 +1,2 @@
+{"type":"user","uuid":"u-nest-1"}
+{"type":"assistant","uuid":"nest-gen-001","message":{"model":"claude-opus-4-5","usage":{"input_tokens":200,"output_tokens":800},"content":[{"type":"text","text":"Here is my answer"}]}}

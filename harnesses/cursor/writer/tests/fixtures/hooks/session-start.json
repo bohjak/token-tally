@@ -1,0 +1,1 @@
+{"hook_event_name":"sessionStart","conversation_id":"cursor-conv-001","session_id":"cursor-conv-001","generation_id":null,"model":"claude-sonnet-4-20250514","cursor_version":"1.7.5","workspace_roots":["/tmp"],"cwd":"/tmp","is_background_agent":false,"composer_mode":"agent"}

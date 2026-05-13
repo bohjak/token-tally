@@ -1,0 +1,67 @@
+# OpenAI model pricing — curated source of truth.
+#
+# All rates are USD per one million tokens (MTok) at OpenAI list price.
+# OpenAI does not have an explicit cache-write operation (caching is automatic);
+# cacheWritePerMTokUSD is always 0. cacheReadPerMTokUSD reflects the cached
+# input token discount where supported.
+#
+# Source: https://platform.openai.com/docs/pricing
+
+provider: openai
+asOf: "2026-05-13"
+sourceUrl: "https://platform.openai.com/docs/pricing"
+
+models:
+  - id: gpt-4o
+    aliases:
+      - gpt-4o-2024-11-20
+      - gpt-4o-2024-08-06
+      - gpt-4o-2024-05-13
+    inputPerMTokUSD: 2.5
+    outputPerMTokUSD: 10
+    cacheReadPerMTokUSD: 1.25
+    cacheWritePerMTokUSD: 0
+
+  - id: gpt-4o-mini
+    aliases:
+      - gpt-4o-mini-2024-07-18
+    inputPerMTokUSD: 0.15
+    outputPerMTokUSD: 0.6
+    cacheReadPerMTokUSD: 0.075
+    cacheWritePerMTokUSD: 0
+
+  - id: o1
+    aliases:
+      - o1-2024-12-17
+    inputPerMTokUSD: 15
+    outputPerMTokUSD: 60
+    cacheReadPerMTokUSD: 7.5
+    cacheWritePerMTokUSD: 0
+
+  - id: o1-mini
+    aliases:
+      - o1-mini-2024-09-12
+    inputPerMTokUSD: 1.1
+    outputPerMTokUSD: 4.4
+    cacheReadPerMTokUSD: 0.55
+    cacheWritePerMTokUSD: 0
+
+  - id: o3-mini
+    inputPerMTokUSD: 1.1
+    outputPerMTokUSD: 4.4
+    cacheReadPerMTokUSD: 0.55
+    cacheWritePerMTokUSD: 0
+
+  - id: gpt-4-turbo
+    aliases:
+      - gpt-4-turbo-2024-04-09
+    inputPerMTokUSD: 10
+    outputPerMTokUSD: 30
+    cacheReadPerMTokUSD: 0
+    cacheWritePerMTokUSD: 0
+
+  - id: gpt-4
+    inputPerMTokUSD: 30
+    outputPerMTokUSD: 60
+    cacheReadPerMTokUSD: 0
+    cacheWritePerMTokUSD: 0

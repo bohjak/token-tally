@@ -2,4 +2,5 @@ packages:
   - store
   - harnesses/pi/writer-extension
   - harnesses/claude-code/writer
+  - harnesses/cursor/writer
   - clients/pi-usage-command

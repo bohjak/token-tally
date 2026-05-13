@@ -166,6 +166,7 @@ aggregations. It is a diagnostic and forward-compatibility table only.
 | Install manifest | `~/.config/token-tally/install.json` |
 | State / logs | `~/.local/state/token-tally/logs/` |
 | Claude Code hook state | `~/.local/state/token-tally/claude-code/` |
+| Cursor hook state | `~/.local/state/token-tally/cursor/` |
 | NDJSON spool | `~/.local/share/token-tally/spool/` |
 
 XDG environment variables (`$XDG_DATA_HOME`, `$XDG_CONFIG_HOME`,
@@ -184,6 +185,43 @@ environment variables.
 It is safe to delete this directory. The next Claude Code hook invocation will
 recreate state as needed; at worst, a transcript may be scanned from the
 beginning and idempotent upserts will prevent duplicate rows.
+
+### Cursor hook state
+
+Cursor hooks also run as short-lived processes. The writer keeps a small
+per-session state file under `~/.local/state/token-tally/cursor/`, named by
+the session's `conversation_id`. These files contain only bookkeeping: turn
+and message counters, active tool IDs, and whether a backfill drain has
+already run for this session. They do **not** contain prompts, assistant text,
+tool inputs, tool outputs, file contents, or environment variables.
+
+It is safe to delete this directory. The next Cursor hook invocation will
+recreate state as needed; idempotent upserts prevent duplicate rows.
+
+#### Best-effort token backfill
+
+On `stop` and `sessionEnd`, the Cursor writer attempts to backfill token and
+model data for messages that were recorded as zero-token placeholders:
+
+1. **Transcript** — if Cursor provides a `transcript_path` in the hook payload
+   and the file is readable, the writer inspects it first for token metadata.
+2. **Private SQLite fallback** — if the transcript is absent or lacks usable
+   data, the writer reads Cursor's internal `state.vscdb` in read-only mode
+   (`query_only=1`). This file is a private Cursor implementation detail;
+   token counts are often zero. The writer tries platform-specific paths:
+
+   | Platform | Path |
+   |---|---|
+   | macOS | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` |
+   | Linux | `~/.config/Cursor/User/globalStorage/state.vscdb` |
+   | Windows | `%APPDATA%/Cursor/User/globalStorage/state.vscdb` |
+
+   If the file is missing, locked, or on an unsupported platform, the backfill
+   is silently skipped. Cursor is never blocked by this read attempt.
+
+Messages for which no token data was found remain with
+`cost_source = 'unknown'` and zero cost columns. This is expected for most
+Cursor sessions until Cursor adds token counts to hook payloads.
 
 ### NDJSON spool
 

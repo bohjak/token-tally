@@ -28,6 +28,10 @@ info()  { echo -e "  ${GREEN}✓${RESET}  $*"; }
 warn()  { echo -e "  ${YELLOW}!${RESET}  $*"; }
 err()   { echo -e "  ${RED}✗${RESET}  $*"; }
 
+claude_code_is_present() {
+  command -v claude &>/dev/null || [[ -d "${HOME}/.claude" ]]
+}
+
 ensure_symlink() {
   local link_path="$1"
   local target_path="$2"
@@ -144,11 +148,12 @@ main() {
   local repo_root="${1:?REPO_ROOT is required}"
   local claude_dir="${HOME}/.claude"
 
-  if [[ ! -d "${claude_dir}" ]]; then
-    warn "Claude Code settings directory not found (${claude_dir})"
+  if ! claude_code_is_present; then
+    warn "Claude Code not detected"
     warn "Install or run Claude Code first, then re-run 'make install'."
     return 1
   fi
+  mkdir -p "${claude_dir}"
 
   local writer_dir="${repo_root}/harnesses/claude-code/writer"
   local hook_target="${writer_dir}/dist/bin/token-tally-claude-hook.js"

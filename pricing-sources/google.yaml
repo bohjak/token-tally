@@ -1,0 +1,57 @@
+# Google (Gemini) model pricing — curated source of truth.
+#
+# All rates are USD per one million tokens (MTok) at Google AI list price.
+# Rates shown are for the standard (non-batch) API tier.
+# cacheWritePerMTokUSD = context-cache storage write rate (per MTok stored per hour,
+#   but we treat it as the per-MTok creation overhead for consistency).
+# cacheReadPerMTokUSD  = cached input token rate.
+#
+# Source: https://ai.google.dev/gemini-api/docs/pricing
+
+provider: google
+asOf: "2026-05-13"
+sourceUrl: "https://ai.google.dev/gemini-api/docs/pricing"
+
+models:
+  - id: gemini-2.0-flash
+    aliases:
+      - gemini-2.0-flash-001
+      - gemini-2.0-flash-exp
+    inputPerMTokUSD: 0.1
+    outputPerMTokUSD: 0.4
+    cacheReadPerMTokUSD: 0.025
+    cacheWritePerMTokUSD: 1
+
+  - id: gemini-2.0-flash-lite
+    inputPerMTokUSD: 0.075
+    outputPerMTokUSD: 0.3
+    cacheReadPerMTokUSD: 0.01875
+    cacheWritePerMTokUSD: 0.25
+
+  - id: gemini-1.5-pro
+    aliases:
+      - gemini-1.5-pro-002
+      - gemini-1.5-pro-001
+      - gemini-1.5-pro-latest
+    inputPerMTokUSD: 1.25
+    outputPerMTokUSD: 5
+    cacheReadPerMTokUSD: 0.3125
+    cacheWritePerMTokUSD: 4.5
+
+  - id: gemini-1.5-flash
+    aliases:
+      - gemini-1.5-flash-002
+      - gemini-1.5-flash-001
+      - gemini-1.5-flash-latest
+    inputPerMTokUSD: 0.075
+    outputPerMTokUSD: 0.3
+    cacheReadPerMTokUSD: 0.01875
+    cacheWritePerMTokUSD: 1
+
+  - id: gemini-1.5-flash-8b
+    aliases:
+      - gemini-1.5-flash-8b-001
+    inputPerMTokUSD: 0.0375
+    outputPerMTokUSD: 0.15
+    cacheReadPerMTokUSD: 0.01
+    cacheWritePerMTokUSD: 0.25

@@ -1,0 +1,77 @@
+# Anthropic model pricing — curated source of truth.
+#
+# All rates are USD per one million tokens (MTok) at Anthropic list price.
+# cacheWritePerMTokUSD = prompt-cache creation (write) rate.
+# cacheReadPerMTokUSD  = prompt-cache hit (read) rate.
+#
+# When rates change: update the entries and bump asOf to today's date.
+# The release-check script (--check flag) fails if asOf is > 180 days old.
+#
+# Source: https://www.anthropic.com/pricing
+
+provider: anthropic
+asOf: "2026-05-13"
+sourceUrl: "https://www.anthropic.com/pricing"
+
+models:
+  - id: claude-opus-4-5
+    aliases:
+      - claude-opus-4
+    inputPerMTokUSD: 15
+    outputPerMTokUSD: 75
+    cacheReadPerMTokUSD: 1.5
+    cacheWritePerMTokUSD: 18.75
+
+  - id: claude-sonnet-4-5
+    aliases:
+      - claude-sonnet-4
+    inputPerMTokUSD: 3
+    outputPerMTokUSD: 15
+    cacheReadPerMTokUSD: 0.3
+    cacheWritePerMTokUSD: 3.75
+
+  - id: claude-3-5-sonnet-20241022
+    aliases:
+      - claude-3-5-sonnet
+    inputPerMTokUSD: 3
+    outputPerMTokUSD: 15
+    cacheReadPerMTokUSD: 0.3
+    cacheWritePerMTokUSD: 3.75
+
+  - id: claude-3-5-sonnet-20240620
+    inputPerMTokUSD: 3
+    outputPerMTokUSD: 15
+    cacheReadPerMTokUSD: 0.3
+    cacheWritePerMTokUSD: 3.75
+
+  - id: claude-3-5-haiku-20241022
+    aliases:
+      - claude-3-5-haiku
+    inputPerMTokUSD: 0.8
+    outputPerMTokUSD: 4
+    cacheReadPerMTokUSD: 0.08
+    cacheWritePerMTokUSD: 1
+
+  - id: claude-3-opus-20240229
+    aliases:
+      - claude-3-opus
+    inputPerMTokUSD: 15
+    outputPerMTokUSD: 75
+    cacheReadPerMTokUSD: 1.5
+    cacheWritePerMTokUSD: 18.75
+
+  - id: claude-3-sonnet-20240229
+    aliases:
+      - claude-3-sonnet
+    inputPerMTokUSD: 3
+    outputPerMTokUSD: 15
+    cacheReadPerMTokUSD: 0.3
+    cacheWritePerMTokUSD: 3.75
+
+  - id: claude-3-haiku-20240307
+    aliases:
+      - claude-3-haiku
+    inputPerMTokUSD: 0.25
+    outputPerMTokUSD: 1.25
+    cacheReadPerMTokUSD: 0.03
+    cacheWritePerMTokUSD: 0.3

@@ -1,0 +1,2 @@
+{"role":"user","id":"u-1","content":"Hello"}
+{"role":"assistant","id":"openai-gen-001","model":"gpt-4o","usage":{"prompt_tokens":10,"completion_tokens":25},"content":"Hi there!"}

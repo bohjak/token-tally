@@ -1,0 +1,2 @@
+{"role":"user","id":"u-1","content":"Hello"}
+{"role":"model","id":"gemini-gen-001","model":"gemini-1.5-pro","usage_metadata":{"prompt_token_count":12,"candidates_token_count":45},"candidates":[{"content":{"parts":[{"text":"Hello!"}]}}]}

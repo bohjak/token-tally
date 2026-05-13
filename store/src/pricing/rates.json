@@ -1,0 +1,302 @@
+{
+  "generatedAt": "2026-05-13T09:55:58.052Z",
+  "sources": [
+    {
+      "provider": "anthropic",
+      "asOf": "2026-05-13",
+      "sourceUrl": "https://www.anthropic.com/pricing"
+    },
+    {
+      "provider": "google",
+      "asOf": "2026-05-13",
+      "sourceUrl": "https://ai.google.dev/gemini-api/docs/pricing"
+    },
+    {
+      "provider": "openai",
+      "asOf": "2026-05-13",
+      "sourceUrl": "https://platform.openai.com/docs/pricing"
+    },
+    {
+      "provider": "xai",
+      "asOf": "2026-05-13",
+      "sourceUrl": "https://x.ai/api"
+    }
+  ],
+  "models": [
+    {
+      "aliases": [
+        "claude-3-5-haiku"
+      ],
+      "id": "claude-3-5-haiku-20241022",
+      "inputPerMTokUSD": 0.8,
+      "outputPerMTokUSD": 4,
+      "cacheReadPerMTokUSD": 0.08,
+      "cacheWritePerMTokUSD": 1,
+      "provider": "anthropic"
+    },
+    {
+      "aliases": [],
+      "id": "claude-3-5-sonnet-20240620",
+      "inputPerMTokUSD": 3,
+      "outputPerMTokUSD": 15,
+      "cacheReadPerMTokUSD": 0.3,
+      "cacheWritePerMTokUSD": 3.75,
+      "provider": "anthropic"
+    },
+    {
+      "aliases": [
+        "claude-3-5-sonnet"
+      ],
+      "id": "claude-3-5-sonnet-20241022",
+      "inputPerMTokUSD": 3,
+      "outputPerMTokUSD": 15,
+      "cacheReadPerMTokUSD": 0.3,
+      "cacheWritePerMTokUSD": 3.75,
+      "provider": "anthropic"
+    },
+    {
+      "aliases": [
+        "claude-3-haiku"
+      ],
+      "id": "claude-3-haiku-20240307",
+      "inputPerMTokUSD": 0.25,
+      "outputPerMTokUSD": 1.25,
+      "cacheReadPerMTokUSD": 0.03,
+      "cacheWritePerMTokUSD": 0.3,
+      "provider": "anthropic"
+    },
+    {
+      "aliases": [
+        "claude-3-opus"
+      ],
+      "id": "claude-3-opus-20240229",
+      "inputPerMTokUSD": 15,
+      "outputPerMTokUSD": 75,
+      "cacheReadPerMTokUSD": 1.5,
+      "cacheWritePerMTokUSD": 18.75,
+      "provider": "anthropic"
+    },
+    {
+      "aliases": [
+        "claude-3-sonnet"
+      ],
+      "id": "claude-3-sonnet-20240229",
+      "inputPerMTokUSD": 3,
+      "outputPerMTokUSD": 15,
+      "cacheReadPerMTokUSD": 0.3,
+      "cacheWritePerMTokUSD": 3.75,
+      "provider": "anthropic"
+    },
+    {
+      "aliases": [
+        "claude-opus-4"
+      ],
+      "id": "claude-opus-4-5",
+      "inputPerMTokUSD": 15,
+      "outputPerMTokUSD": 75,
+      "cacheReadPerMTokUSD": 1.5,
+      "cacheWritePerMTokUSD": 18.75,
+      "provider": "anthropic"
+    },
+    {
+      "aliases": [
+        "claude-sonnet-4"
+      ],
+      "id": "claude-sonnet-4-5",
+      "inputPerMTokUSD": 3,
+      "outputPerMTokUSD": 15,
+      "cacheReadPerMTokUSD": 0.3,
+      "cacheWritePerMTokUSD": 3.75,
+      "provider": "anthropic"
+    },
+    {
+      "aliases": [
+        "gemini-1.5-flash-002",
+        "gemini-1.5-flash-001",
+        "gemini-1.5-flash-latest"
+      ],
+      "id": "gemini-1.5-flash",
+      "inputPerMTokUSD": 0.075,
+      "outputPerMTokUSD": 0.3,
+      "cacheReadPerMTokUSD": 0.01875,
+      "cacheWritePerMTokUSD": 1,
+      "provider": "google"
+    },
+    {
+      "aliases": [
+        "gemini-1.5-flash-8b-001"
+      ],
+      "id": "gemini-1.5-flash-8b",
+      "inputPerMTokUSD": 0.0375,
+      "outputPerMTokUSD": 0.15,
+      "cacheReadPerMTokUSD": 0.01,
+      "cacheWritePerMTokUSD": 0.25,
+      "provider": "google"
+    },
+    {
+      "aliases": [
+        "gemini-1.5-pro-002",
+        "gemini-1.5-pro-001",
+        "gemini-1.5-pro-latest"
+      ],
+      "id": "gemini-1.5-pro",
+      "inputPerMTokUSD": 1.25,
+      "outputPerMTokUSD": 5,
+      "cacheReadPerMTokUSD": 0.3125,
+      "cacheWritePerMTokUSD": 4.5,
+      "provider": "google"
+    },
+    {
+      "aliases": [
+        "gemini-2.0-flash-001",
+        "gemini-2.0-flash-exp"
+      ],
+      "id": "gemini-2.0-flash",
+      "inputPerMTokUSD": 0.1,
+      "outputPerMTokUSD": 0.4,
+      "cacheReadPerMTokUSD": 0.025,
+      "cacheWritePerMTokUSD": 1,
+      "provider": "google"
+    },
+    {
+      "aliases": [],
+      "id": "gemini-2.0-flash-lite",
+      "inputPerMTokUSD": 0.075,
+      "outputPerMTokUSD": 0.3,
+      "cacheReadPerMTokUSD": 0.01875,
+      "cacheWritePerMTokUSD": 0.25,
+      "provider": "google"
+    },
+    {
+      "aliases": [],
+      "id": "gpt-4",
+      "inputPerMTokUSD": 30,
+      "outputPerMTokUSD": 60,
+      "cacheReadPerMTokUSD": 0,
+      "cacheWritePerMTokUSD": 0,
+      "provider": "openai"
+    },
+    {
+      "aliases": [
+        "gpt-4-turbo-2024-04-09"
+      ],
+      "id": "gpt-4-turbo",
+      "inputPerMTokUSD": 10,
+      "outputPerMTokUSD": 30,
+      "cacheReadPerMTokUSD": 0,
+      "cacheWritePerMTokUSD": 0,
+      "provider": "openai"
+    },
+    {
+      "aliases": [
+        "gpt-4o-2024-11-20",
+        "gpt-4o-2024-08-06",
+        "gpt-4o-2024-05-13"
+      ],
+      "id": "gpt-4o",
+      "inputPerMTokUSD": 2.5,
+      "outputPerMTokUSD": 10,
+      "cacheReadPerMTokUSD": 1.25,
+      "cacheWritePerMTokUSD": 0,
+      "provider": "openai"
+    },
+    {
+      "aliases": [
+        "gpt-4o-mini-2024-07-18"
+      ],
+      "id": "gpt-4o-mini",
+      "inputPerMTokUSD": 0.15,
+      "outputPerMTokUSD": 0.6,
+      "cacheReadPerMTokUSD": 0.075,
+      "cacheWritePerMTokUSD": 0,
+      "provider": "openai"
+    },
+    {
+      "aliases": [
+        "grok-2-1212",
+        "grok-2-latest"
+      ],
+      "id": "grok-2",
+      "inputPerMTokUSD": 2,
+      "outputPerMTokUSD": 10,
+      "cacheReadPerMTokUSD": 0,
+      "cacheWritePerMTokUSD": 0,
+      "provider": "xai"
+    },
+    {
+      "aliases": [
+        "grok-2-mini-1212"
+      ],
+      "id": "grok-2-mini",
+      "inputPerMTokUSD": 0.2,
+      "outputPerMTokUSD": 0.4,
+      "cacheReadPerMTokUSD": 0,
+      "cacheWritePerMTokUSD": 0,
+      "provider": "xai"
+    },
+    {
+      "aliases": [
+        "grok-2-vision-1212"
+      ],
+      "id": "grok-2-vision",
+      "inputPerMTokUSD": 2,
+      "outputPerMTokUSD": 10,
+      "cacheReadPerMTokUSD": 0,
+      "cacheWritePerMTokUSD": 0,
+      "provider": "xai"
+    },
+    {
+      "aliases": [
+        "grok-3-latest"
+      ],
+      "id": "grok-3",
+      "inputPerMTokUSD": 3,
+      "outputPerMTokUSD": 15,
+      "cacheReadPerMTokUSD": 0,
+      "cacheWritePerMTokUSD": 0,
+      "provider": "xai"
+    },
+    {
+      "aliases": [
+        "grok-3-mini-latest"
+      ],
+      "id": "grok-3-mini",
+      "inputPerMTokUSD": 0.3,
+      "outputPerMTokUSD": 0.5,
+      "cacheReadPerMTokUSD": 0,
+      "cacheWritePerMTokUSD": 0,
+      "provider": "xai"
+    },
+    {
+      "aliases": [
+        "o1-2024-12-17"
+      ],
+      "id": "o1",
+      "inputPerMTokUSD": 15,
+      "outputPerMTokUSD": 60,
+      "cacheReadPerMTokUSD": 7.5,
+      "cacheWritePerMTokUSD": 0,
+      "provider": "openai"
+    },
+    {
+      "aliases": [
+        "o1-mini-2024-09-12"
+      ],
+      "id": "o1-mini",
+      "inputPerMTokUSD": 1.1,
+      "outputPerMTokUSD": 4.4,
+      "cacheReadPerMTokUSD": 0.55,
+      "cacheWritePerMTokUSD": 0,
+      "provider": "openai"
+    },
+    {
+      "aliases": [],
+      "id": "o3-mini",
+      "inputPerMTokUSD": 1.1,
+      "outputPerMTokUSD": 4.4,
+      "cacheReadPerMTokUSD": 0.55,
+      "cacheWritePerMTokUSD": 0,
+      "provider": "openai"
+    }
+  ]
+}

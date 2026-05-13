@@ -1,0 +1,25 @@
+{
+  "name": "@token-tally/cursor-writer",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "main": "dist/src/main.js",
+  "bin": {
+    "token-tally-cursor-hook": "./dist/bin/token-tally-cursor-hook.js"
+  },
+  "scripts": {
+    "build": "tsc && chmod +x dist/bin/token-tally-cursor-hook.js",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test 'dist/tests/**/*.test.js'"
+  },
+  "dependencies": {
+    "@token-tally/store": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}
