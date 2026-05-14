@@ -10,6 +10,10 @@
 #
 # Arguments:
 #   $1  REPO_ROOT — absolute path to the repository root
+#   --writer       Install only the writer extension
+#   --usage        Install only the usage command
+#
+# If neither --writer nor --usage is supplied, both are installed.
 #
 # Exit codes:
 #   0   success (both symlinks created or already correct)
@@ -69,6 +73,26 @@ ensure_symlink() {
 
 main() {
   local repo_root="${1:?REPO_ROOT is required}"
+  shift
+
+  local install_writer=false
+  local install_usage=false
+  if [[ "$#" == "0" ]]; then
+    install_writer=true
+    install_usage=true
+  fi
+
+  local arg
+  for arg in "$@"; do
+    case "${arg}" in
+      --writer) install_writer=true ;;
+      --usage) install_usage=true ;;
+      *)
+        err "Unknown option: ${arg}"
+        return 2
+        ;;
+    esac
+  done
 
   local pi_ext_dir="${HOME}/.pi/agent/extensions"
 
@@ -83,25 +107,29 @@ main() {
   local writer_source="${repo_root}/harnesses/pi/writer-extension"
   local usage_source="${repo_root}/clients/pi-usage-command"
 
-  if [[ ! -d "${writer_source}" ]]; then
+  if [[ "${install_writer}" == "true" && ! -d "${writer_source}" ]]; then
     err "Writer extension source not found: ${writer_source}"
     return 1
   fi
 
-  if [[ ! -d "${usage_source}" ]]; then
+  if [[ "${install_usage}" == "true" && ! -d "${usage_source}" ]]; then
     err "Usage command source not found: ${usage_source}"
     return 1
   fi
 
-  ensure_symlink \
-    "${pi_ext_dir}/token-tally-writer" \
-    "${writer_source}" \
-    "Pi writer extension"
+  if [[ "${install_writer}" == "true" ]]; then
+    ensure_symlink \
+      "${pi_ext_dir}/token-tally-writer" \
+      "${writer_source}" \
+      "Pi writer extension"
+  fi
 
-  ensure_symlink \
-    "${pi_ext_dir}/token-tally-usage" \
-    "${usage_source}" \
-    "Pi usage command"
+  if [[ "${install_usage}" == "true" ]]; then
+    ensure_symlink \
+      "${pi_ext_dir}/token-tally-usage" \
+      "${usage_source}" \
+      "Pi usage command"
+  fi
 }
 
 main "$@"

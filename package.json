@@ -17,9 +17,12 @@
     "pnpm": ">=9.0.0"
   },
   "devDependencies": {
+    "@types/node": "^24.12.3",
     "tsx": "^4.19.4"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["better-sqlite3"]
+    "onlyBuiltDependencies": [
+      "better-sqlite3"
+    ]
   }
 }

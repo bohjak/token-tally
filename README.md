@@ -44,7 +44,7 @@ the selected set:
 - always creates the central database at `~/.local/share/token-tally/events.db`
 - optionally builds and installs `/Applications/ToTally.app`, restarting it if already running
 - registers the app as a login item (enabled by default; change in Settings)
-- optionally installs the Pi writer and usage-command extensions (if Pi is present)
+- optionally installs the Pi writer and Pi usage-command extension independently (if Pi is present)
 - optionally installs Claude Code hooks (if Claude Code is detected)
 - optionally installs Cursor hooks (if Cursor is detected)
 

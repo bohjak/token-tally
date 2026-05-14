@@ -52,8 +52,8 @@ The installer then runs each selected component in order:
    `/Applications/ToTally.app`, and launches it. The app registers itself as a
    login item on first launch (see [Launch at login](#launch-at-login)).
 
-3. **Pi integration** (optional) — if Pi is detected, creates two symlinks
-   under `~/.pi/agent/extensions/`:
+3. **Pi integrations** (optional) — if Pi is detected, the picker lets you
+   install either or both Pi extensions under `~/.pi/agent/extensions/`:
    - `token-tally-writer` → `<repo>/harnesses/pi/writer-extension`
    - `token-tally-usage` → `<repo>/clients/pi-usage-command`
 
