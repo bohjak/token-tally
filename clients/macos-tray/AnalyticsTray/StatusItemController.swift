@@ -16,7 +16,7 @@ final class StatusItemController {
     init(popoverController: PopoverController) {
         self.popoverController = popoverController
 
-        // Variable-length so the label can grow/shrink with "Σ 284k · $1.42".
+        // Variable-length so the label can grow/shrink with "Σ 0.28M · $1.42".
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         guard let button = statusItem.button else { return }
@@ -46,11 +46,11 @@ final class StatusItemController {
         )
     }
 
-    /// Updates the menu bar label (e.g. "Σ 284k · $1.42").
+    /// Updates the menu bar label (e.g. "Σ 0.28M · $1.42").
     ///
     /// Sets `button.attributedTitle` with a monospaced-digit system font so
     /// all digits render at a fixed column width, preventing the label from
-    /// jittering horizontally as digit counts change (e.g. "9k" → "10k").
+    /// jittering horizontally as digit counts change.
     ///
     /// AppKit note: `title` and `attributedTitle` are mutually exclusive —
     /// setting one clears the other. We always use `attributedTitle` once real

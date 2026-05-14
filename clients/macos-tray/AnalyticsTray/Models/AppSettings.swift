@@ -4,9 +4,9 @@ import Foundation
 
 /// Controls what the `NSStatusItem` label shows.
 enum MenuBarDisplayMode: String, CaseIterable, Identifiable {
-    /// "Σ 284k · $1.42" — tokens and cost (default).
+    /// "Σ 0.28M · $1.42" — tokens and cost (default).
     case combinedTokensCost
-    /// "Σ 284k" — tokens only.
+    /// "Σ 0.28M" — tokens only.
     case tokensOnly
     /// "Σ $1.42" — cost only.
     case costOnly

@@ -31,8 +31,10 @@ function fmtUsd(n: number): string {
   return `$${n.toFixed(4)}`;
 }
 
-function fmtNum(n: number): string {
-  return n.toLocaleString("en");
+function fmtTokens(n: number): string {
+  const megaTokens = n / 1_000_000;
+  if (n < 1_000_000) return `${megaTokens.toFixed(2)}M`;
+  return `${megaTokens.toFixed(1)}M`;
 }
 
 function fmtPct(n: number): string {
@@ -67,7 +69,7 @@ function renderSummary(data: unknown): string {
     const bucket = b as typeof d.today;
     const unpriced = bucket.unpriced_count > 0 ? `${bucket.unpriced_count}⚠` : "—";
     lines.push(
-      `│ ${l(label, 10)} ${r(fmtUsd(bucket.cost_usd), 12)} ${r(fmtNum(bucket.billable_tokens), 12)} ` +
+      `│ ${l(label, 10)} ${r(fmtUsd(bucket.cost_usd), 12)} ${r(fmtTokens(bucket.billable_tokens), 12)} ` +
       `${r(bucket.turns, 7)} ${r(unpriced, 9)} │`
     );
   }
@@ -112,7 +114,7 @@ function renderModels(data: unknown): string {
   for (const row of rows) {
     lines.push(
       `${l(row.model_id, 28)} ${l(row.harness_id, 12)} ${r(fmtUsd(row.cost_usd), 10)} ` +
-      `${r(fmtPct(row.share), 7)} ${r(row.turns, 6)} ${r(Math.round(row.avg_tokens_per_turn), 13)}`
+      `${r(fmtPct(row.share), 7)} ${r(row.turns, 6)} ${r(fmtTokens(row.avg_tokens_per_turn), 13)}`
     );
   }
   if (unpriced_count > 0) {
@@ -205,7 +207,7 @@ function renderDaily(data: unknown): string {
   lines.push("─".repeat(46));
   for (const row of rows) {
     lines.push(
-      `${l(row.date, 12)} ${r(fmtUsd(row.cost_usd), 12)} ${r(fmtNum(row.billable_tokens), 12)} ${r(row.turns, 6)}`
+      `${l(row.date, 12)} ${r(fmtUsd(row.cost_usd), 12)} ${r(fmtTokens(row.billable_tokens), 12)} ${r(row.turns, 6)}`
     );
   }
   if (unpriced_count > 0) {

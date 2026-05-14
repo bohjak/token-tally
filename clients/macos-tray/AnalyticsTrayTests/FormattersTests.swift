@@ -42,40 +42,21 @@ struct FormatCostTests {
 struct FormatTokensTests {
 
     @Test func zero() {
-        #expect(Formatters.formatTokens(0) == "0")
+        #expect(Formatters.formatTokens(0) == "0.00M")
     }
 
-    @Test func belowThousand() {
-        #expect(Formatters.formatTokens(1) == "1")
-        #expect(Formatters.formatTokens(999) == "999")
-    }
-
-    @Test func oneThousand() {
-        // Exactly 1 000 → one decimal place.
-        #expect(Formatters.formatTokens(1_000) == "1.0k")
-    }
-
-    @Test func lowThousands_oneDecimal() {
-        #expect(Formatters.formatTokens(1_200) == "1.2k")
-        #expect(Formatters.formatTokens(9_900) == "9.9k")
-    }
-
-    @Test func tenThousands_noDecimal() {
-        #expect(Formatters.formatTokens(12_345) == "12k")
-        #expect(Formatters.formatTokens(284_000) == "284k")
-    }
-
-    @Test func rounding_tenThousands() {
-        // 12 500 rounds up to 13k; 12 499 stays at 12k.
-        #expect(Formatters.formatTokens(12_500) == "13k")
-        #expect(Formatters.formatTokens(12_499) == "12k")
+    @Test func belowOneMillion_twoDecimals() {
+        #expect(Formatters.formatTokens(1) == "0.00M")
+        #expect(Formatters.formatTokens(12_345) == "0.01M")
+        #expect(Formatters.formatTokens(284_000) == "0.28M")
+        #expect(Formatters.formatTokens(999_999) == "1.00M")
     }
 
     @Test func oneMillion() {
         #expect(Formatters.formatTokens(1_000_000) == "1.0M")
     }
 
-    @Test func millions() {
+    @Test func millions_oneDecimal() {
         #expect(Formatters.formatTokens(1_200_000) == "1.2M")
         // 1_250_000 sits on a rounding boundary (1.25); avoid it.
         // Use values that unambiguously round in one direction.
@@ -95,14 +76,14 @@ struct MenuBarTitleTests {
     @Test func combined() {
         #expect(
             Formatters.menuBarTitle(tokens: 284_000, cost: 1.42, mode: .combinedTokensCost)
-            == "Σ 284k · $1.42"
+            == "Σ 0.28M · $1.42"
         )
     }
 
     @Test func tokensOnly() {
         #expect(
             Formatters.menuBarTitle(tokens: 284_000, cost: 1.42, mode: .tokensOnly)
-            == "Σ 284k"
+            == "Σ 0.28M"
         )
     }
 
@@ -123,7 +104,7 @@ struct MenuBarTitleTests {
     @Test func combined_zeroData() {
         #expect(
             Formatters.menuBarTitle(tokens: 0, cost: 0, mode: .combinedTokensCost)
-            == "Σ 0 · $0.00"
+            == "Σ 0.00M · $0.00"
         )
     }
 }

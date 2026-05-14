@@ -5,9 +5,9 @@ export function formatCost(usd: number): string {
 }
 
 export function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(Math.round(n));
+  const megaTokens = n / 1_000_000;
+  if (n < 1_000_000) return `${megaTokens.toFixed(2)}M`;
+  return `${megaTokens.toFixed(1)}M`;
 }
 
 export function formatDuration(ms: number | null): string {

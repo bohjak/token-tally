@@ -31,32 +31,20 @@ enum Formatters {
     ///
     /// Examples:
     /// ```
-    /// formatTokens(0)          → "0"
-    /// formatTokens(999)        → "999"
-    /// formatTokens(1_000)      → "1.0k"
-    /// formatTokens(1_200)      → "1.2k"
-    /// formatTokens(12_345)     → "12k"
-    /// formatTokens(284_000)    → "284k"
+    /// formatTokens(0)          → "0.00M"
+    /// formatTokens(999)        → "0.00M"
+    /// formatTokens(1_000)      → "0.00M"
+    /// formatTokens(12_345)     → "0.01M"
+    /// formatTokens(284_000)    → "0.28M"
     /// formatTokens(1_000_000)  → "1.0M"
     /// formatTokens(1_250_000)  → "1.3M"
     /// ```
     static func formatTokens(_ count: Int64) -> String {
-        switch count {
-        case ..<1_000:
-            return "\(count)"
-        case 1_000..<10_000:
-            // One decimal place to distinguish e.g. 1.2k from 1.8k.
-            let value = Double(count) / 1_000
-            return String(format: "%.1fk", value)
-        case 10_000..<1_000_000:
-            // Round to nearest thousand; no decimal needed at this scale.
-            let value = (count + 500) / 1_000
-            return "\(value)k"
-        default:
-            // Millions — one decimal place.
-            let value = Double(count) / 1_000_000
-            return String(format: "%.1fM", value)
+        let value = Double(count) / 1_000_000
+        if count < 1_000_000 {
+            return String(format: "%.2fM", value)
         }
+        return String(format: "%.1fM", value)
     }
 
     // MARK: - Menu bar title (plain string)
@@ -70,10 +58,10 @@ enum Formatters {
     /// Examples:
     /// ```
     /// menuBarTitle(tokens: 284_000, cost: 1.42, mode: .combinedTokensCost)
-    ///     → "Σ 284k · $1.42"
+    ///     → "Σ 0.28M · $1.42"
     ///
     /// menuBarTitle(tokens: 284_000, cost: 1.42, mode: .tokensOnly)
-    ///     → "Σ 284k"
+    ///     → "Σ 0.28M"
     ///
     /// menuBarTitle(tokens: 284_000, cost: 1.42, mode: .costOnly)
     ///     → "Σ $1.42"
@@ -104,8 +92,8 @@ enum Formatters {
     ///
     /// Applies `NSFont.monospacedDigitSystemFont` to the entire string so all
     /// digits render at a fixed column width. Without this, the status bar label
-    /// jitters horizontally as digit counts change: "9k" → "10k" widens by one
-    /// proportional digit, causing everything to the right of the label to shift.
+    /// jitters horizontally as digit counts change: proportional digits can
+    /// cause everything to the right of the label to shift.
     /// Fixed-width digits eliminate the jitter while keeping the Σ glyph and
     /// letter characters in the regular system font style.
     ///

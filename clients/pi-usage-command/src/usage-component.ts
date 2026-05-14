@@ -255,8 +255,14 @@ export class UsageTabsComponent {
     return align === "r" ? s.padStart(w).slice(-w) : s.padEnd(w).slice(0, w);
   }
   private fmtUsd(n: number): string { return `$${(n ?? 0).toFixed(4)}`; }
-  private fmtNum(n: number): string { return (n ?? 0).toLocaleString("en"); }
   private fmtPct(n: number): string { return `${((n ?? 0) * 100).toFixed(1)}%`; }
+  private fmtTokens(n: number): string {
+    const v = n ?? 0;
+    if (!Number.isFinite(v)) return "—";
+    const megaTokens = v / 1_000_000;
+    if (v < 1_000_000) return `${megaTokens.toFixed(2)}M`;
+    return `${megaTokens.toFixed(1)}M`;
+  }
 
   /**
    * Compact integer with k/M suffix.  At column widths typical for a TUI a
@@ -444,11 +450,11 @@ export class UsageTabsComponent {
       { title: "Cost (USD)", align: "r", min: 12, cell: (r) => this.fmtUsd(r.b.cost_usd ?? 0) },
       {
         title: "Fresh", align: "r", min: 8,
-        cell: (r) => this.fmtCount(
+        cell: (r) => this.fmtTokens(
           Math.max(0, (r.b.tokens ?? 0) - (r.b.cached_tokens ?? 0)),
         ),
       },
-      { title: "Cached",    align: "r", min: 8, cell: (r) => this.fmtCount(r.b.cached_tokens ?? 0) },
+      { title: "Cached",    align: "r", min: 8, cell: (r) => this.fmtTokens(r.b.cached_tokens ?? 0) },
       {
         title: "Cache%", align: "r", min: 7,
         cell: (r) => {
@@ -508,11 +514,11 @@ export class UsageTabsComponent {
       { title: "Cost",         align: "r", min: 10, cell: (r) => this.fmtUsd(r.cost_usd) },
       { title: "Share",        align: "r", min: 7,  cell: (r) => this.fmtPct(r.share) },
       { title: "Turns",        align: "r", min: 6,  cell: (r) => String(r.turns) },
-      { title: "Tok in",       align: "r", min: 8,  cell: (r) => this.fmtCount(r.tokens_in) },
-      { title: "Tok out",      align: "r", min: 8,  cell: (r) => this.fmtCount(r.tokens_out) },
-      { title: "Cached",       align: "r", min: 8,  cell: (r) => this.fmtCount(r.cached_tokens ?? 0) },
+      { title: "Tok in",       align: "r", min: 8,  cell: (r) => this.fmtTokens(r.tokens_in) },
+      { title: "Tok out",      align: "r", min: 8,  cell: (r) => this.fmtTokens(r.tokens_out) },
+      { title: "Cached",       align: "r", min: 8,  cell: (r) => this.fmtTokens(r.cached_tokens ?? 0) },
       { title: "Cache%",       align: "r", min: 7,  cell: (r) => this.fmtPct(r.cache_hit_rate ?? 0) },
-      { title: "Avg/turn",     align: "r", min: 9,  cell: (r) => this.fmtCount(Math.round(r.avg_tokens_per_turn)) },
+      { title: "Avg/turn",     align: "r", min: 9,  cell: (r) => this.fmtTokens(r.avg_tokens_per_turn) },
     ], rows, "  No model data for this period.");
   }
 
@@ -736,9 +742,9 @@ export class UsageTabsComponent {
       { title: "Cost",   align: "r", min: 12, cell: (r) => this.fmtUsd(r.cost_usd) },
       {
         title: "Fresh",  align: "r", min: 8,
-        cell: (r) => this.fmtCount(Math.max(0, r.tokens - (r.cached_tokens ?? 0))),
+        cell: (r) => this.fmtTokens(Math.max(0, r.tokens - (r.cached_tokens ?? 0))),
       },
-      { title: "Cached", align: "r", min: 8, cell: (r) => this.fmtCount(r.cached_tokens ?? 0) },
+      { title: "Cached", align: "r", min: 8, cell: (r) => this.fmtTokens(r.cached_tokens ?? 0) },
       {
         title: "Cache%", align: "r", min: 7,
         cell: (r) => (r.tokens > 0 ? this.fmtPct((r.cached_tokens ?? 0) / r.tokens) : "—"),
