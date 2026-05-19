@@ -1,6 +1,6 @@
 import type { Database } from "better-sqlite3";
 import { Hono } from "hono";
-import { cors } from "hono/cors";
+import type { ServerType } from "@hono/node-server";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { readFileSync } from "node:fs";
@@ -26,10 +26,19 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // CLI args
 // ---------------------------------------------------------------------------
 
-function parseArgs(argv: string[]): { port: number; dbPath: string | undefined; noOpen: boolean } {
+function parseArgs(argv: string[]): {
+  port: number;
+  dbPath: string | undefined;
+  noOpen: boolean;
+  /** Milliseconds before idle shutdown. null = no timeout. Default: 5 minutes. */
+  idleTimeoutMs: number | null;
+} {
   let port = 3741;
   let dbPath: string | undefined;
   let noOpen = false;
+  // Default idle timeout: 5 minutes. Overridden by --idle-timeout <ms> or
+  // disabled entirely by --no-idle-timeout.
+  let idleTimeoutMs: number | null = 5 * 60 * 1000;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
@@ -43,10 +52,17 @@ function parseArgs(argv: string[]): { port: number; dbPath: string | undefined; 
       dbPath = arg.slice(5);
     } else if (arg === "--no-open") {
       noOpen = true;
+    } else if (arg === "--idle-timeout" && argv[i + 1]) {
+      // The launcher passes the timeout in milliseconds as an integer string.
+      idleTimeoutMs = parseInt(argv[++i]!, 10);
+    } else if (arg.startsWith("--idle-timeout=")) {
+      idleTimeoutMs = parseInt(arg.slice(15), 10);
+    } else if (arg === "--no-idle-timeout") {
+      idleTimeoutMs = null;
     }
   }
 
-  return { port, dbPath, noOpen };
+  return { port, dbPath, noOpen, idleTimeoutMs };
 }
 
 // ---------------------------------------------------------------------------
@@ -85,18 +101,64 @@ function parseOpts(url: URL) {
 }
 
 // ---------------------------------------------------------------------------
+// Clean shutdown
+// ---------------------------------------------------------------------------
+
+/**
+ * Perform a clean shutdown: run optional runtime cleanup (remove the runtime
+ * metadata file), close the SQLite connection, stop the HTTP server from
+ * accepting new connections, then exit.
+ *
+ * Called from SIGINT/SIGTERM handlers and the idle-timeout loop. Using
+ * process.exit(0) directly (rather than waiting for server.close callback)
+ * because this is a short-lived local server and we don't want keep-alive
+ * connections to delay an intentional shutdown.
+ */
+function shutdown(
+  server: ServerType,
+  dbClose: () => void,
+  runtimeCleanup?: () => void,
+): void {
+  runtimeCleanup?.();
+  dbClose();
+  server.close();
+  process.exit(0);
+}
+
+// ---------------------------------------------------------------------------
 // Build Hono app
 // ---------------------------------------------------------------------------
 
-function buildApp(db: Database, dbPath: string) {
+/**
+ * Build the Hono application.
+ *
+ * @param updateActivity - Called on every /api/* request so the idle-timeout
+ *   loop knows the browser is still actively using the server.
+ */
+function buildApp(db: Database, dbPath: string, updateActivity: () => void) {
   const app = new Hono();
 
-  app.use("*", cors({ origin: "*" }));
+  // Track last activity time for all API requests. This middleware runs before
+  // individual route handlers, so it fires regardless of which endpoint is hit.
+  // Static file requests are intentionally excluded (they don't indicate active
+  // browser use of the data layer).
+  app.use("/api/*", async (_c, next) => {
+    updateActivity();
+    await next();
+  });
 
-  // Health
+  // Health — includes pid so the launcher can verify it's talking to the right
+  // server process when checking for a reusable instance.
   app.get("/api/health", (c) => {
     const schemaVersion = getSchemaVersion(db);
-    return c.json({ ok: true, dbPath, schemaVersion });
+    return c.json({ ok: true, dbPath, pid: process.pid, schemaVersion });
+  });
+
+  // Heartbeat — browser sends this every 30 s to keep the idle timeout clock
+  // reset while the tab is open. updateActivity() is already called by the
+  // /api/* middleware above, so we just need to return a timestamp.
+  app.post("/api/heartbeat", (c) => {
+    return c.json({ ok: true, now: Date.now() });
   });
 
   // Harnesses
@@ -196,8 +258,21 @@ function buildApp(db: Database, dbPath: string) {
 // Main
 // ---------------------------------------------------------------------------
 
-export async function main(argv: string[]): Promise<void> {
-  const { port: preferredPort, dbPath: dbPathArg, noOpen } = parseArgs(argv);
+/**
+ * Start the explorer server.
+ *
+ * @param argv - Raw CLI arguments (parsed internally by parseArgs). The
+ *   launcher passes a constructed argv array even in foreground mode so the
+ *   same parseArgs logic applies.
+ * @param options.onShutdown - Optional callback invoked just before the
+ *   process exits (SIGINT, SIGTERM, or idle timeout). Used by the launcher to
+ *   remove the runtime metadata file.
+ */
+export async function main(
+  argv: string[],
+  options?: { onShutdown?: () => void },
+): Promise<void> {
+  const { port: preferredPort, dbPath: dbPathArg, noOpen, idleTimeoutMs } = parseArgs(argv);
   const dbPath = dbPathArg ?? defaultDatabasePath();
 
   const opened = openReadOnly(dbPath);
@@ -208,20 +283,53 @@ export async function main(argv: string[]): Promise<void> {
 
   const { db, close } = opened;
 
-  process.on("SIGINT", () => { close(); process.exit(0); });
-  process.on("SIGTERM", () => { close(); process.exit(0); });
+  // Activity timestamp — updated by the /api/* middleware on every API request.
+  // Used by the idle-timeout loop to decide when to shut down.
+  let lastActivityAt = Date.now();
+  const updateActivity = () => {
+    lastActivityAt = Date.now();
+  };
 
   const port = await findFreePort(preferredPort);
-  const app = buildApp(db, dbPath);
-  const url = `http://localhost:${port}`;
+  const app = buildApp(db, dbPath, updateActivity);
+  const url = `http://127.0.0.1:${port}`;
 
-  serve({ fetch: app.fetch, port, hostname: "127.0.0.1" }, () => {
+  const server = serve({ fetch: app.fetch, port, hostname: "127.0.0.1" }, () => {
     console.log(`Exploring at ${url}`);
     if (!noOpen) {
       import("open").then((m) => m.default(url)).catch(() => {});
     }
   });
+
+  // Wire up SIGINT/SIGTERM to perform a clean shutdown.
+  const doShutdown = () => shutdown(server, close, options?.onShutdown);
+  process.on("SIGINT", doShutdown);
+  process.on("SIGTERM", doShutdown);
+
+  // Idle-timeout loop: check every 30 seconds whether the browser has been
+  // inactive long enough to warrant shutting down. Skipped when idleTimeoutMs
+  // is null (--no-idle-timeout).
+  if (idleTimeoutMs !== null) {
+    const checkInterval = setInterval(() => {
+      if (Date.now() - lastActivityAt > idleTimeoutMs) {
+        console.log(
+          `Explorer idle for ${Math.round(idleTimeoutMs / 1000)}s — shutting down.`,
+        );
+        clearInterval(checkInterval);
+        shutdown(server, close, options?.onShutdown);
+      }
+    }, 30_000);
+    // Don't let the interval timer keep the process alive if everything else
+    // has already exited (e.g., server closed externally).
+    checkInterval.unref();
+  }
 }
 
-// Run when executed directly
-main(process.argv.slice(2));
+// Run when executed directly (not when imported by the launcher for foreground
+// mode). Using import.meta.url comparison avoids double-execution on import.
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main(process.argv.slice(2)).catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
