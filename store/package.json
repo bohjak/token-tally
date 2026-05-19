@@ -27,17 +27,19 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "node --test 'tests/**/*.test.js'"
+    "test": "node --test 'tests/**/*.test.js' 'dist/cli/tests/**/*.test.js'"
   },
   "engines": {
     "node": ">=24.0.0"
   },
   "dependencies": {
-    "better-sqlite3": "^12.9.0"
+    "better-sqlite3": "^12.9.0",
+    "yargs": "^18.0.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^24.0.0",
+    "@types/yargs": "^17.0.35",
     "typescript": "^5.5.0"
   }
 }
