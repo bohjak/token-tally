@@ -8,7 +8,12 @@
  * ## Cost handling
  * Pi emits costs as IEEE-754 USD floats (e.g. 0.001234). We convert to
  * integer micro-dollars (Math.round(usd * 1_000_000)) to match the central
- * store schema. cost_source is "harness" because Pi provides cost values.
+ * store schema.
+ *
+ * When Pi provides a non-zero cost total, cost_source is "harness".
+ * When Pi emits no cost (zero or missing total), we fall back to the local
+ * pricing table via computeCostMicros(): cost_source becomes "writer" when
+ * rates are found, or "unknown" when the model is not in the table.
  *
  * ## Message ID synthesis
  * Pi does not expose a stable per-message identifier. We synthesise:
@@ -32,6 +37,7 @@ import type { AnalyticsWriterLike } from "../cli-writer.ts";
 import type { PiAPIStub, PiContextStub } from "./types.ts";
 import { getCentralSessionId, getSession } from "./session-state.ts";
 import { getTurn, setActiveModel } from "./turn-state.ts";
+import { computeCostMicros } from "@token-tally/store";
 
 // ---------------------------------------------------------------------------
 // Pi event payload shapes
@@ -142,17 +148,39 @@ export function register(pi: PiAPIStub, writer: AnalyticsWriterLike): void {
       const cacheReadTokens = safeNum(usage?.cacheRead);
       const cacheWriteTokens = safeNum(usage?.cacheWrite);
 
-      // Pi emits cost as USD floats — convert to integer micros for the store.
-      // cost_source = "harness" because Pi computed and emitted the cost value.
-      const costInputMicros = toMicros(safeNum(cost?.input));
-      const costOutputMicros = toMicros(safeNum(cost?.output));
-      const costCacheReadMicros = toMicros(safeNum(cost?.cacheRead));
-      const costCacheWriteMicros = toMicros(safeNum(cost?.cacheWrite));
+      // Prefer Pi's emitted cost when it is non-zero (cost_source = "harness").
+      // When Pi reports no cost (missing or zero total), fall back to the local
+      // pricing table via computeCostMicros (cost_source = "writer" or "unknown").
+      let costInputMicros: number;
+      let costOutputMicros: number;
+      let costCacheReadMicros: number;
+      let costCacheWriteMicros: number;
+      let costSource: "harness" | "writer" | "unknown";
 
-      // Use "unknown" when Pi reported no cost (e.g. model with no pricing info).
-      // Readers must not sum "unknown" rows into headline totals.
-      const costSource =
-        safeNum(cost?.total) > 0 ? ("harness" as const) : ("unknown" as const);
+      if (safeNum(cost?.total) > 0) {
+        // Pi provided cost data — use it directly.
+        costInputMicros = toMicros(safeNum(cost?.input));
+        costOutputMicros = toMicros(safeNum(cost?.output));
+        costCacheReadMicros = toMicros(safeNum(cost?.cacheRead));
+        costCacheWriteMicros = toMicros(safeNum(cost?.cacheWrite));
+        costSource = "harness";
+      } else {
+        // Pi did not emit cost data — compute from the local pricing table.
+        const breakdown = computeCostMicros({
+          modelId: typeof msg.model === "string" && msg.model.length > 0
+            ? msg.model
+            : null,
+          inputTokens,
+          outputTokens,
+          cacheReadTokens,
+          cacheWriteTokens,
+        });
+        costInputMicros = breakdown.costInputMicros;
+        costOutputMicros = breakdown.costOutputMicros;
+        costCacheReadMicros = breakdown.costCacheReadMicros;
+        costCacheWriteMicros = breakdown.costCacheWriteMicros;
+        costSource = breakdown.costSource; // "writer" | "unknown"
+      }
 
       await writer.recordLlmMessage({
         harnessId: "pi",
