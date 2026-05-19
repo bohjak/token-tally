@@ -35,12 +35,13 @@ MANIFEST_PATH="${TOKEN_TALLY_CONFIG_DIR}/install.json"
 # ---------------------------------------------------------------------------
 
 if [[ -t 1 ]]; then
-  GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; BOLD='\033[1m'; RESET='\033[0m'
+  GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; DIM='\033[2m'; BOLD='\033[1m'; RESET='\033[0m'
 else
-  GREEN=''; YELLOW=''; RED=''; BOLD=''; RESET=''
+  GREEN=''; YELLOW=''; RED=''; DIM=''; BOLD=''; RESET=''
 fi
 
 pass()    { echo -e "  ${GREEN}✓${RESET}  $*"; }
+info()    { echo -e "  ${DIM}–${RESET}  $*"; }
 warn()    { echo -e "  ${YELLOW}!${RESET}  $*"; ((WARN_COUNT++)) || true; }
 fail()    { echo -e "  ${RED}✗${RESET}  $*"; ((FAIL_COUNT++)) || true; }
 section() { echo -e "\n${BOLD}$*${RESET}"; }
@@ -115,8 +116,7 @@ check_pi_extensions() {
   local pi_ext_dir="${HOME}/.pi/agent/extensions"
 
   if [[ ! -d "${pi_ext_dir}" ]]; then
-    warn "Pi extensions directory not found (${pi_ext_dir})"
-    warn "Install Pi first, then re-run 'make install'"
+    info "Pi not installed — skipping Pi extension checks"
     return
   fi
 
@@ -156,8 +156,7 @@ check_claude_code() {
   local settings_path="${claude_dir}/settings.json"
 
   if [[ ! -d "${claude_dir}" ]]; then
-    warn "Claude Code settings directory not found (${claude_dir})"
-    warn "Install or run Claude Code first, then re-run 'make install'"
+    info "Claude Code not installed — skipping Claude Code checks"
     return
   fi
 
@@ -280,8 +279,7 @@ check_cursor() {
   local hooks_path="${cursor_dir}/hooks.json"
 
   if [[ ! -d "${cursor_dir}" ]]; then
-    warn "Cursor config directory not found (${cursor_dir})"
-    warn "Install or run Cursor first, then re-run 'make install'"
+    info "Cursor not installed — skipping Cursor checks"
     return
   fi
 
