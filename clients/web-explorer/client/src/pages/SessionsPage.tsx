@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from "react";
 import { useNavigate } from "react-router";
 import { useFilters } from "../hooks/useFilters.ts";
 import { useApi } from "../hooks/useApi.ts";
+import { useRefreshNonce } from "../hooks/useRefreshSignal";
 import { api, type SessionRow } from "../api.ts";
 import FilterBar from "../components/FilterBar.tsx";
 import DataTable from "../components/DataTable.tsx";
@@ -89,10 +90,11 @@ export default function SessionsPage() {
   const [error, setError] = useState<string | null>(null);
 
   const { filters } = f;
-  const summary = useApi(() => api.summary(filters), [filters.from, filters.to, JSON.stringify(filters.harnesses)]);
+  const refreshNonce = useRefreshNonce();
+  const summary = useApi(() => api.summary(filters), [filters.from, filters.to, JSON.stringify(filters.harnesses), refreshNonce]);
   const compareSummary = useApi(
     () => f.compareRange ? api.summary({ ...filters, from: f.compareRange.from, to: f.compareRange.to }) : Promise.resolve(null),
-    [filters.from, filters.to, JSON.stringify(filters.harnesses), f.compareRange?.from, f.compareRange?.to]
+    [filters.from, filters.to, JSON.stringify(filters.harnesses), f.compareRange?.from, f.compareRange?.to, refreshNonce]
   );
 
   const load = useCallback(
@@ -123,7 +125,7 @@ export default function SessionsPage() {
     setCursor(undefined);
     load(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters.from, filters.to, JSON.stringify(filters.harnesses), filters.model, filters.repo]);
+  }, [filters.from, filters.to, JSON.stringify(filters.harnesses), filters.model, filters.repo, refreshNonce]);
 
   return (
     <div className="p-6">

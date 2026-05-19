@@ -8,6 +8,8 @@ import TurnDetailPage from "./pages/TurnDetailPage.tsx";
 import ModelsPage from "./pages/ModelsPage.tsx";
 import ReposPage from "./pages/ReposPage.tsx";
 import ToolsPage from "./pages/ToolsPage.tsx";
+import { RefreshProvider } from "./hooks/useRefreshSignal.tsx";
+import { useHeartbeat } from "./hooks/useHeartbeat.ts";
 
 const router = createBrowserRouter([
   {
@@ -26,6 +28,25 @@ const router = createBrowserRouter([
   },
 ]);
 
+/**
+ * Root app component. Wraps everything in RefreshProvider so that any
+ * descendant can call useRefreshNonce() / useRefreshTrigger().
+ */
 export default function App() {
+  return (
+    <RefreshProvider>
+      <AppInner />
+    </RefreshProvider>
+  );
+}
+
+/**
+ * Inner component that runs the heartbeat loop. Keeping it separate from App
+ * means hooks execute inside the RefreshProvider's render tree (required by
+ * React's rules of hooks), and the heartbeat fires regardless of which route
+ * is currently active.
+ */
+function AppInner() {
+  useHeartbeat();
   return <RouterProvider router={router} />;
 }

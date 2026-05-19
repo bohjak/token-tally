@@ -1,5 +1,6 @@
 import { useParams, Link } from "react-router";
 import { useApi } from "../hooks/useApi.ts";
+import { useRefreshNonce } from "../hooks/useRefreshSignal";
 import { api, type LlmMessageRow, type ToolCallRow } from "../api.ts";
 import DataTable from "../components/DataTable.tsx";
 import StatCard from "../components/StatCard.tsx";
@@ -87,7 +88,8 @@ const toolColumns: ColumnDef<ToolCallRow>[] = [
 
 export default function TurnDetailPage() {
   const { sessionId, turnId } = useParams<{ sessionId: string; turnId: string }>();
-  const result = useApi(() => api.turnDetail(sessionId!, turnId!), [sessionId, turnId]);
+  const refreshNonce = useRefreshNonce();
+  const result = useApi(() => api.turnDetail(sessionId!, turnId!), [sessionId, turnId, refreshNonce]);
 
   if (result.status === "loading") {
     return <div className="p-6 text-gray-400 text-sm">Loading…</div>;

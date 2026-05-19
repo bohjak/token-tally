@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router";
 import { useApi } from "../hooks/useApi.ts";
 import { useFilters } from "../hooks/useFilters.ts";
+import { useRefreshNonce } from "../hooks/useRefreshSignal";
 import { api, type DailyRow, type Filters, type HourlyRow, type ModelRow, type RepoRow, type ToolRow } from "../api.ts";
 import StatCard from "../components/StatCard.tsx";
 import CostChart, { metricLabels, type ChartMetric } from "../components/CostChart.tsx";
@@ -117,25 +118,26 @@ export default function OverviewPage() {
   const [chartMetric, setChartMetric] = useState<ChartMetric>("cost_usd");
   const useHourly = useHourlyRange(filters.from, filters.to);
   const harnessKey = JSON.stringify(filters.harnesses);
+  const refreshNonce = useRefreshNonce();
 
-  const summary = useApi(() => api.summary(filters), [filters.from, filters.to, harnessKey]);
+  const summary = useApi(() => api.summary(filters), [filters.from, filters.to, harnessKey, refreshNonce]);
   const daily = useApi<ChartData>(
     () => useHourly ? api.hourly(filters) : api.daily(filters),
-    [filters.from, filters.to, harnessKey, useHourly]
+    [filters.from, filters.to, harnessKey, useHourly, refreshNonce]
   );
-  const components = useApi(() => api.components(filters), [filters.from, filters.to, harnessKey]);
-  const models = useApi(() => api.models(filters), [filters.from, filters.to, harnessKey]);
-  const repos = useApi(() => api.repos(filters), [filters.from, filters.to, harnessKey]);
-  const tools = useApi(() => api.tools(filters), [filters.from, filters.to, harnessKey]);
+  const components = useApi(() => api.components(filters), [filters.from, filters.to, harnessKey, refreshNonce]);
+  const models = useApi(() => api.models(filters), [filters.from, filters.to, harnessKey, refreshNonce]);
+  const repos = useApi(() => api.repos(filters), [filters.from, filters.to, harnessKey, refreshNonce]);
+  const tools = useApi(() => api.tools(filters), [filters.from, filters.to, harnessKey, refreshNonce]);
   const compareSummary = useApi(
     () => compareRange ? api.summary(comparisonFilters(filters, compareRange)) : Promise.resolve(null),
-    [filters.from, filters.to, harnessKey, compareRange?.from, compareRange?.to]
+    [filters.from, filters.to, harnessKey, compareRange?.from, compareRange?.to, refreshNonce]
   );
   const compareDaily = useApi<ChartData | null>(
     () => compareRange
       ? useHourly ? api.hourly(comparisonFilters(filters, compareRange)) : api.daily(comparisonFilters(filters, compareRange))
       : Promise.resolve(null),
-    [filters.from, filters.to, harnessKey, compareRange?.from, compareRange?.to, useHourly]
+    [filters.from, filters.to, harnessKey, compareRange?.from, compareRange?.to, useHourly, refreshNonce]
   );
 
   const modelRows = useMemo((): RankedRow[] => {

@@ -1,5 +1,6 @@
 import { useParams, useNavigate, Link } from "react-router";
 import { useApi } from "../hooks/useApi.ts";
+import { useRefreshNonce } from "../hooks/useRefreshSignal";
 import { api, type TurnRow } from "../api.ts";
 import StatCard from "../components/StatCard.tsx";
 import DataTable from "../components/DataTable.tsx";
@@ -16,8 +17,9 @@ function repoLabel(s: { repo_owner: string | null; repo_name: string | null; rep
 export default function SessionDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const refreshNonce = useRefreshNonce();
 
-  const result = useApi(() => api.session(id!), [id]);
+  const result = useApi(() => api.session(id!), [id, refreshNonce]);
 
   const turnColumns: ColumnDef<TurnRow>[] = [
     {

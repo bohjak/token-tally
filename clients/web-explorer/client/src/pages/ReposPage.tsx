@@ -1,6 +1,7 @@
 import { useNavigate, createSearchParams } from "react-router";
 import { useFilters } from "../hooks/useFilters.ts";
 import { useApi } from "../hooks/useApi.ts";
+import { useRefreshNonce } from "../hooks/useRefreshSignal";
 import { api, type RepoRow } from "../api.ts";
 import FilterBar from "../components/FilterBar.tsx";
 import DataTable from "../components/DataTable.tsx";
@@ -102,14 +103,15 @@ export default function ReposPage() {
   const f = useFilters();
   const navigate = useNavigate();
   const { filters } = f;
+  const refreshNonce = useRefreshNonce();
 
   const result = useApi(
     () => api.repos(filters),
-    [filters.from, filters.to, JSON.stringify(filters.harnesses), filters.repo]
+    [filters.from, filters.to, JSON.stringify(filters.harnesses), filters.repo, refreshNonce]
   );
   const compareResult = useApi(
     () => f.compareRange ? api.repos({ ...filters, from: f.compareRange.from, to: f.compareRange.to }) : Promise.resolve(null),
-    [filters.from, filters.to, JSON.stringify(filters.harnesses), filters.repo, f.compareRange?.from, f.compareRange?.to]
+    [filters.from, filters.to, JSON.stringify(filters.harnesses), filters.repo, f.compareRange?.from, f.compareRange?.to, refreshNonce]
   );
 
   const compareByKey = new Map(

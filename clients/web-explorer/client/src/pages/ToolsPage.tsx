@@ -1,5 +1,6 @@
 import { useFilters } from "../hooks/useFilters.ts";
 import { useApi } from "../hooks/useApi.ts";
+import { useRefreshNonce } from "../hooks/useRefreshSignal";
 import { api, type ToolRow } from "../api.ts";
 import FilterBar from "../components/FilterBar.tsx";
 import DataTable from "../components/DataTable.tsx";
@@ -96,14 +97,15 @@ const columns: ColumnDef<ToolDisplayRow>[] = [
 export default function ToolsPage() {
   const f = useFilters();
   const { filters } = f;
+  const refreshNonce = useRefreshNonce();
 
   const result = useApi(
     () => api.tools(filters),
-    [filters.from, filters.to, JSON.stringify(filters.harnesses)]
+    [filters.from, filters.to, JSON.stringify(filters.harnesses), refreshNonce]
   );
   const compareResult = useApi(
     () => f.compareRange ? api.tools({ ...filters, from: f.compareRange.from, to: f.compareRange.to }) : Promise.resolve(null),
-    [filters.from, filters.to, JSON.stringify(filters.harnesses), f.compareRange?.from, f.compareRange?.to]
+    [filters.from, filters.to, JSON.stringify(filters.harnesses), f.compareRange?.from, f.compareRange?.to, refreshNonce]
   );
 
   const compareByKey = new Map(

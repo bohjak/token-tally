@@ -4,6 +4,7 @@ import { api, type DailyRow } from "../api.ts";
 import DataTable from "../components/DataTable.tsx";
 import { useApi } from "../hooks/useApi.ts";
 import { useFilters } from "../hooks/useFilters.ts";
+import { useRefreshNonce } from "../hooks/useRefreshSignal";
 import { formatCost, formatPercent, formatTokens } from "../lib/format.ts";
 
 function parseLocalDay(date: string): Date {
@@ -101,12 +102,13 @@ export default function DaysPage() {
   const f = useFilters();
   const navigate = useNavigate();
   const { filters } = f;
-  const harnesses = useApi(() => api.harnesses(), []);
+  const refreshNonce = useRefreshNonce();
+  const harnesses = useApi(() => api.harnesses(), [refreshNonce]);
   const selectedHarness = filters.harnesses?.length === 1 ? filters.harnesses[0] : "";
 
   const result = useApi(
     () => api.daily(filters),
-    [filters.from, filters.to, JSON.stringify(filters.harnesses)]
+    [filters.from, filters.to, JSON.stringify(filters.harnesses), refreshNonce]
   );
 
   const rows = result.status === "ok" ? result.data.rows : [];

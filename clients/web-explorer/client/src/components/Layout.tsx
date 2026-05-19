@@ -1,4 +1,6 @@
+import { useEffect } from "react";
 import { NavLink, Outlet } from "react-router";
+import { useRefreshTrigger } from "../hooks/useRefreshSignal";
 
 const primaryNavItems = [
   { to: "/",      label: "Overview", end: true },
@@ -13,6 +15,17 @@ const deepDiveNavItems = [
 ];
 
 export default function Layout() {
+  const trigger = useRefreshTrigger();
+
+  // Re-fetch all data whenever the window regains focus (e.g. after switching
+  // away and coming back). Combined with the manual button below, this keeps
+  // the explorer up-to-date without requiring a full page reload.
+  useEffect(() => {
+    const handler = () => trigger();
+    window.addEventListener("focus", handler);
+    return () => window.removeEventListener("focus", handler);
+  }, [trigger]);
+
   return (
     <div className="flex h-screen bg-gray-50 font-sans">
       {/* Sidebar */}
@@ -64,8 +77,16 @@ export default function Layout() {
             </div>
           </div>
         </nav>
-        <div className="px-4 py-3 border-t border-gray-700">
-          <span className="text-gray-500 text-xs">token-tally</span>
+        <div className="border-t border-gray-700">
+          <button
+            onClick={trigger}
+            className="w-full px-4 py-2 text-left text-gray-400 hover:text-white text-xs hover:bg-gray-800 transition-colors"
+          >
+            ↻ Refresh
+          </button>
+          <div className="px-4 pb-3">
+            <span className="text-gray-500 text-xs">token-tally</span>
+          </div>
         </div>
       </aside>
 
