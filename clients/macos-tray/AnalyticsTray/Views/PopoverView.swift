@@ -226,16 +226,6 @@ struct PopoverView: View {
 
     private var footerActions: some View {
         HStack(spacing: 8) {
-            Button(action: { env.store.refresh() }) {
-                Label("Refresh", systemImage: "arrow.clockwise")
-            }
-            .help("Refresh now")
-
-            Button(action: openAnalyticsFolder) {
-                Label("Open Folder", systemImage: "folder")
-            }
-            .help("Open analytics data folder in Finder")
-
             Button(action: openExplorer) {
                 Label("Open Explorer", systemImage: "globe")
             }
@@ -305,11 +295,6 @@ struct PopoverView: View {
             alert.addButton(withTitle: "OK")
             alert.runModal()
         }
-    }
-
-    private func openAnalyticsFolder() {
-        let url = Paths.analyticsFolder(forDatabasePath: env.settings.databasePath)
-        NSWorkspace.shared.open(url)
     }
 
     private func quitApp() {
