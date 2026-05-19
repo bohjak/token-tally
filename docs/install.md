@@ -47,25 +47,32 @@ The installer then runs each selected component in order:
    binary location depends on your pnpm configuration (typically
    `~/.local/share/pnpm/` or `~/.pnpm/`).
 
-2. **Tray app** — builds `clients/macos-tray` in release mode, assembles
+2. **Web Explorer** (conditional) — builds `@token-tally/web-explorer`: the
+   TypeScript API server and the React analytics client. This step runs only
+   when at least one selected component needs it (currently: macOS tray app or
+   Pi usage command). Store-only installs skip this step. After installation,
+   `token-tally explore` starts or reuses a local browser-based dashboard
+   (see [Web Explorer](#web-explorer)).
+
+3. **Tray app** — builds `clients/macos-tray` in release mode, assembles
    `ToTally.app`, stops any running instance, installs it atomically to
    `/Applications/ToTally.app`, and launches it. The app registers itself as a
    login item on first launch (see [Launch at login](#launch-at-login)).
 
-3. **Pi integrations** (optional) — if Pi is detected, the picker lets you
+4. **Pi integrations** (optional) — if Pi is detected, the picker lets you
    install either or both Pi extensions under `~/.pi/agent/extensions/`:
    - `token-tally-writer` → `<repo>/harnesses/pi/writer-extension`
    - `token-tally-usage` → `<repo>/clients/pi-usage-command`
 
    Pi is not required. The tray app and CLI work independently of any harness.
 
-4. **Claude Code integration** (optional) — if Claude Code is detected, builds the
+5. **Claude Code integration** (optional) — if Claude Code is detected, builds the
    Claude Code writer, symlinks `~/.local/bin/token-tally-claude-hook` to the
    compiled hook binary, and merges ToTally-owned hook commands into
    `~/.claude/settings.json`. The installer backs up an existing settings file
    before modifying it and preserves all non-ToTally hooks and settings.
 
-5. **Cursor integration** (optional) — if Cursor is detected, builds the
+6. **Cursor integration** (optional) — if Cursor is detected, builds the
    Cursor writer, symlinks `~/.local/bin/token-tally-cursor-hook` to the
    compiled hook binary, and merges ToTally-owned hook commands into
    `~/.cursor/hooks.json`. Cursor uses lower-camel event names and flat hook
@@ -73,13 +80,15 @@ The installer then runs each selected component in order:
    Claude Code settings format. The installer backs up an existing
    `hooks.json` before modifying it and preserves all non-ToTally hooks.
 
-6. **Manifest** — writes `~/.config/token-tally/install.json` with the
+7. **Manifest** — writes `~/.config/token-tally/install.json` with the
    repo path, component status, database path, and schema version.
 
 A failure in step 1 (store) aborts the run — it is the foundation and is always
-installed. Failures in steps 2, 3, or 4 are reported and printed, but the other
-selected components still complete. Skipped optional components are recorded as
-not installed in the install summary and manifest.
+installed. A failure in step 2 (web explorer), when required, also aborts the
+run because the tray and Pi components depend on the launcher being present.
+Failures in steps 3–6 are reported and printed, but the other selected
+components still complete. Skipped optional components are recorded as not
+installed in the install summary and manifest.
 
 ### Gatekeeper and unsigned app
 
@@ -188,6 +197,90 @@ Pi extensions are still installed even when the tray step fails. To install the
 already-built app bundle only, either copy it with administrator privileges or
 open `clients/macos-tray/dist/` in Finder and drag `ToTally.app` into
 `/Applications` when prompted.
+
+---
+
+## Web Explorer
+
+`token-tally explore` opens a browser-based analytics dashboard backed by the
+central SQLite database. The server is local-only (binds to `127.0.0.1`),
+short-lived, and queries SQLite on each request — no caching or authentication
+needed.
+
+### Starting the explorer
+
+```sh
+token-tally explore
+```
+
+The command:
+
+- Checks whether an explorer server is already running for the same database.
+  If so, it reuses it rather than starting a second process.
+- Starts a new server on port 3741 (or the next free port nearby) if none is
+  running.
+- Opens the dashboard in your default browser.
+- Returns immediately — the server runs in the background and exits
+  automatically after **5 minutes of inactivity** (configurable).
+
+While the browser tab is open the server's inactivity timer is reset every
+30 seconds, so it stays alive as long as the tab is visible.
+
+### Options
+
+```text
+--db <path>           SQLite database path (default: central store)
+--port <port>         Preferred localhost port (default: 3741)
+--no-open             Start or reuse the server without opening a browser tab
+--print-url           Print the explorer URL to stdout
+--stop                Stop the running explorer server
+--idle-timeout <dur>  Auto-exit after idle period, e.g. 30s, 5m, 1h (default: 5m)
+--no-idle-timeout     Keep the server running until an explicit stop or signal
+--foreground          Run the server in the foreground (useful for debugging)
+```
+
+Examples:
+
+```sh
+# Print the URL without opening a browser (useful for scripting)
+token-tally explore --print-url --no-open
+
+# Keep the server alive indefinitely
+token-tally explore --no-idle-timeout
+
+# Stop a running server
+token-tally explore --stop
+
+# Use a non-default database
+token-tally explore --db /path/to/other.db
+```
+
+### When it is installed
+
+The Web Explorer is built and installed automatically when at least one selected
+component needs it:
+
+- **macOS tray app** — the tray's "Open Explorer" button launches the explorer.
+- **Pi usage command** — the `/analytics explore` command launches the explorer.
+
+Store-only installs skip the Web Explorer build entirely. If you add an
+explorer-capable component later, re-running `make install` builds it then.
+
+### Troubleshooting
+
+**"Web explorer is not installed"** — the launcher module was not found.
+Re-run `make install` with the macOS tray or Pi usage command selected.
+
+**Port already in use** — another process is using port 3741. Pass
+`--port <other-port>` to use a different port.
+
+**Server did not stop cleanly** — if `--stop` reports nothing running but a
+server process is still alive, find the PID in the runtime file and kill it:
+
+```sh
+cat ~/Library/Caches/token-tally/explorer.json   # shows pid and port
+kill <pid>
+```
 
 ---
 
@@ -334,6 +427,8 @@ swift test  --package-path clients/macos-tray
 | `~/.pi/agent/extensions/token-tally-usage` | Pi usage client symlink |
 | `~/.local/bin/token-tally-cursor-hook` | Cursor hook binary symlink |
 | `~/.local/state/token-tally/cursor/` | Cursor hook per-session state files |
+| `~/Library/Caches/token-tally/explorer.json` | Explorer server runtime metadata (macOS) |
+| `$XDG_RUNTIME_DIR/token-tally/explorer.json` | Explorer server runtime metadata (Linux/XDG) |
 
 All paths honour the `$XDG_DATA_HOME`, `$XDG_CONFIG_HOME`, and
 `$XDG_STATE_HOME` environment variables as prefixes where set.
