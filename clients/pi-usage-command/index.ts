@@ -6,6 +6,8 @@
  *     breakdowns, repo breakdowns, tool stats, and daily cost charts.
  *   - Registers the `/analytics doctor` command: delegates to the
  *     `token-tally doctor` CLI to run central-store diagnostic checks.
+ *   - Registers the `/analytics explore` command: opens the web-based
+ *     analytics explorer via `token-tally explore` (detached process).
  *
  * NON-RESPONSIBILITIES
  *   - Does NOT register any event hooks.
@@ -29,7 +31,7 @@
 type ExtensionAPI = any;
 
 import { writeSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 import { defaultDatabasePath, openReadOnly } from "./src/db.ts";
 import { parseUsageArgs, runQuery } from "./src/queries.ts";
@@ -61,6 +63,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   try {
     registerUsageCommand(pi);
     registerDoctorCommand(pi);
+    registerExploreCommand(pi);
   } catch (err) {
     console.warn("[token-tally:usage] extension failed to initialize:", err);
   }
@@ -229,6 +232,70 @@ function registerDoctorCommand(pi: ExtensionAPI): void {
         // Unexpected non-JSON output — show it verbatim.
         notify(output, "info");
       }
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// /analytics explore command
+// ---------------------------------------------------------------------------
+
+function registerExploreCommand(pi: ExtensionAPI): void {
+  pi.registerCommand("analytics explore", {
+    description:
+      "Open the ToTally web explorer in your browser. " +
+      "Starts a local server (or reuses one already running) and opens the URL. " +
+      "The server exits automatically after 5 minutes of idle.",
+
+    handler: async (_rawArgs: string, ctx: {
+      ui: { notify: (msg: string, kind?: string) => void };
+    }): Promise<void> => {
+      const noPiUi = (ctx as unknown as { hasUI?: boolean }).hasUI === false;
+      const notify = (msg: string, kind = "info") =>
+        noPiUi ? writeStdout(msg) : ctx.ui.notify(msg, kind);
+
+      const dbPath = defaultDatabasePath();
+
+      // Verify that the token-tally binary is reachable before attempting a
+      // detached spawn. spawnSync with a short timeout gives a clear error
+      // rather than a silent failure from an unref'd child.
+      const check = spawnSync("token-tally", ["explore", "--help"], {
+        encoding: "utf8",
+        timeout: 5_000,
+      });
+
+      if (check.error != null || check.status !== 0) {
+        notify(
+          "token-tally is not installed or not on PATH.\n" +
+          "Run: make install  (with macOS tray or Pi usage command selected)",
+          "error",
+        );
+        return;
+      }
+
+      // Launch the explorer as a detached process so it keeps running after
+      // this Pi command handler returns. stdio: 'ignore' prevents the child
+      // from holding open Pi's stdin/stdout/stderr handles.
+      try {
+        const child = spawn(
+          "token-tally",
+          ["explore", "--db", dbPath],
+          { detached: true, stdio: "ignore" },
+        );
+        child.unref();
+      } catch (err) {
+        notify(
+          `[token-tally:explore] Failed to launch explorer: ${String(err)}`,
+          "error",
+        );
+        return;
+      }
+
+      notify(
+        "Opening Token Tally Explorer… " +
+        "(server exits automatically after 5 minutes of idle)",
+        "info",
+      );
     },
   });
 }
