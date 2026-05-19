@@ -19,7 +19,7 @@
  * UNIQUE (harness_id, harness_tool_call_id) deduplicates replays.
  */
 
-import type { AnalyticsWriter } from "@token-tally/store";
+import type { AnalyticsWriterLike } from "../cli-writer.ts";
 import type { PiAPIStub, PiContextStub } from "./types.ts";
 import { getCentralSessionId } from "./session-state.ts";
 import { getTurn } from "./turn-state.ts";
@@ -59,7 +59,7 @@ const activeTools = new Map<string, { startedAt: number; toolName: string }>();
  * @param pi     Pi ExtensionAPI.
  * @param writer The open AnalyticsWriter.
  */
-export function register(pi: PiAPIStub, writer: AnalyticsWriter): void {
+export function register(pi: PiAPIStub, writer: AnalyticsWriterLike): void {
 
   // ── tool_execution_start ──────────────────────────────────────────────────
 

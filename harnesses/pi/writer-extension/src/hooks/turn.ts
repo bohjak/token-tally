@@ -20,7 +20,7 @@
  * The UNIQUE (session_id, harness_turn_id) constraint ensures upserts are safe.
  */
 
-import type { AnalyticsWriter } from "@token-tally/store";
+import type { AnalyticsWriterLike } from "../cli-writer.ts";
 import type { PiAPIStub, PiContextStub } from "./types.ts";
 import { getCentralSessionId, getSession } from "./session-state.ts";
 import {
@@ -63,7 +63,7 @@ type PiModelSelectEvent = {
  * @param pi     Pi ExtensionAPI.
  * @param writer The open AnalyticsWriter.
  */
-export function register(pi: PiAPIStub, writer: AnalyticsWriter): void {
+export function register(pi: PiAPIStub, writer: AnalyticsWriterLike): void {
 
   // ── model_select (secondary — tracking only, no sink write) ───────────────
 

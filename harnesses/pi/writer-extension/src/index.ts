@@ -26,7 +26,7 @@
 type ExtensionAPI = any;
 
 import { createRequire } from "node:module";
-import { AnalyticsWriter } from "@token-tally/store";
+import { createCliAnalyticsWriter } from "./cli-writer.ts";
 import type { ExecFn } from "./hooks/types.ts";
 import { register as registerSession } from "./hooks/session.ts";
 import { register as registerTurn } from "./hooks/turn.ts";
@@ -78,11 +78,11 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     // ── 1. Detect Pi version ───────────────────────────────────────────────
     const harnessVersion = detectPiVersion();
 
-    // ── 2. Open AnalyticsWriter ────────────────────────────────────────────
-    // Opens the central SQLite DB, runs pending migrations, and drains any
-    // closed NDJSON spool files from previous sessions. Falls back to
-    // spool-only mode silently if the DB is unavailable.
-    const writer = await AnalyticsWriter.open({ harnessName: "pi" });
+    // ── 2. Open writer bridge ──────────────────────────────────────────────
+    // The bridge shells out to the installed token-tally CLI with the Node
+    // runtime recorded at install time. This keeps Pi's own Node version from
+    // needing to match the better-sqlite3 ABI used by the store package.
+    const writer = createCliAnalyticsWriter();
 
     // ── 3. Build ExecFn adapter ───────────────────────────────────────────
     // Pi's pi.exec returns { stdout, stderr, code, killed }.

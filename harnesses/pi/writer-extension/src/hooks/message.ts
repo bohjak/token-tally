@@ -28,7 +28,7 @@
  * Only token counts, cost values, model ID, provider, and timing are recorded.
  */
 
-import type { AnalyticsWriter } from "@token-tally/store";
+import type { AnalyticsWriterLike } from "../cli-writer.ts";
 import type { PiAPIStub, PiContextStub } from "./types.ts";
 import { getCentralSessionId, getSession } from "./session-state.ts";
 import { getTurn, setActiveModel } from "./turn-state.ts";
@@ -90,7 +90,7 @@ function toMicros(usd: number): number {
  * @param pi     Pi ExtensionAPI.
  * @param writer The open AnalyticsWriter.
  */
-export function register(pi: PiAPIStub, writer: AnalyticsWriter): void {
+export function register(pi: PiAPIStub, writer: AnalyticsWriterLike): void {
 
   // ── message_end ───────────────────────────────────────────────────────────
 

@@ -23,7 +23,7 @@
  * acceptable for the MVP.
  */
 
-import type { AnalyticsWriter } from "@token-tally/store";
+import type { AnalyticsWriterLike } from "../cli-writer.ts";
 import type { PiAPIStub, PiContextStub, ExecFn } from "./types.ts";
 import {
   setSession,
@@ -64,7 +64,7 @@ type PiModelSelectEvent = {
  */
 export function register(
   pi: PiAPIStub,
-  writer: AnalyticsWriter,
+  writer: AnalyticsWriterLike,
   harnessVersion: string,
   integrationVersion: string,
   exec: ExecFn,
