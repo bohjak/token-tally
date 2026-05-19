@@ -26,7 +26,7 @@ const configDir = join(process.env.XDG_CONFIG_HOME ?? join(home, ".config"), "to
 const stateDir = join(process.env.XDG_STATE_HOME ?? join(home, ".local/state"), "token-tally");
 const manifestPath = join(configDir, "install.json");
 
-type ComponentId = "tray" | "piWriter" | "piUsage" | "claudeCode" | "cursor";
+type ComponentId = "tray" | "piWriter" | "piUsage" | "claudeCode" | "cursor" | "webExplorer";
 type Component = {
   id: ComponentId;
   summaryName: string;
@@ -411,6 +411,7 @@ function initialInstallState(): InstallState {
       piUsage: { ok: false, skipped: false, message: "" },
       claudeCode: { ok: false, skipped: false, message: "" },
       cursor: { ok: false, skipped: false, message: "" },
+      webExplorer: { ok: false, skipped: false, message: "" },
     },
   };
 }
@@ -454,6 +455,46 @@ function runOptionalComponent(
 
   result.message = failedMessage;
   warn(result.message);
+}
+
+// ---------------------------------------------------------------------------
+// Web Explorer install
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns true when at least one selected component depends on the
+ * shared `token-tally explore` launcher being available.
+ */
+function needsWebExplorer(components: Component[]): boolean {
+  return components.some(
+    (c) => c.selected && (c.id === "tray" || c.id === "piUsage"),
+  );
+}
+
+/**
+ * Build @token-tally/web-explorer and record the result in state.
+ * Aborts the install if the build fails, because any client that was
+ * about to be installed would be broken without the launcher.
+ */
+function runWebExplorerInstall(state: InstallState): void {
+  section("Web Explorer");
+  const ok = run("bash", [join(scriptDir, "install-web-explorer.sh")]);
+  state.components.webExplorer = {
+    ok,
+    skipped: false,
+    message: ok
+      ? "Web Explorer built and verified."
+      : "Web Explorer build failed.",
+  };
+  if (ok) {
+    info(state.components.webExplorer.message);
+    return;
+  }
+  err(
+    "Web Explorer build failed. " +
+    "Clients that depend on `token-tally explore` will not work correctly.",
+  );
+  process.exit(1);
 }
 
 function runPricingGeneration(): void {
@@ -565,6 +606,7 @@ function writeManifest(state: InstallState): void {
   const updatedAt = Date.now();
   const data = {
     repoPath: repoRoot,
+    nodePath: process.execPath,
     installedAt,
     updatedAt,
     components: {
@@ -572,6 +614,7 @@ function writeManifest(state: InstallState): void {
         installed: state.storeOk,
         databasePath: state.storeDbPath,
         schemaVersion: state.storeSchemaVersion,
+        nodePath: process.execPath,
       },
       tray: {
         installed: state.components.tray.ok,
@@ -605,6 +648,20 @@ function writeManifest(state: InstallState): void {
         installed: false,
         reason: state.components.cursor.message || "Cursor not detected or install skipped",
       },
+      // webExplorer is a shared infrastructure component, not a user-selectable
+      // integration. It is built when tray or piUsage is selected and skipped
+      // (with skipped:true) for store-only installs.
+      webExplorer: state.components.webExplorer.skipped ? {
+        installed: false,
+        skipped: true,
+        reason: state.components.webExplorer.message || "Not needed by selected components",
+      } : {
+        installed: state.components.webExplorer.ok,
+        command: "token-tally explore",
+        distServerPath: join(repoRoot, "clients/web-explorer/dist/server/index.js"),
+        distClientPath: join(repoRoot, "clients/web-explorer/dist/client/index.html"),
+        package: "@token-tally/web-explorer",
+      },
     },
   };
 
@@ -626,12 +683,13 @@ function resultLabel(result: ComponentResult): string {
 function printSummary(state: InstallState): void {
   section("Summary");
   const storeLabel = state.storeOk ? `${color.green}ok${color.reset}` : `${color.red}failed${color.reset}`;
-  console.log(`  store   ${storeLabel}`);
+  console.log(`  store     ${storeLabel}`);
+  console.log(`  web-exp   ${resultLabel(state.components.webExplorer)}`);
   console.log(`  tray      ${resultLabel(state.components.tray)}`);
   console.log(`  pi-write  ${resultLabel(state.components.piWriter)}`);
   console.log(`  pi-usage  ${resultLabel(state.components.piUsage)}`);
   console.log(`  claude    ${resultLabel(state.components.claudeCode)}`);
-  console.log(`  cursor  ${resultLabel(state.components.cursor)}`);
+  console.log(`  cursor    ${resultLabel(state.components.cursor)}`);
   console.log();
 
   if (state.storeOk) {
@@ -663,6 +721,20 @@ async function main(): Promise<void> {
   const state = initialInstallState();
   runPricingGeneration();
   runStoreInstall(state);
+
+  // Web Explorer is built only when at least one selected component needs the
+  // shared `token-tally explore` launcher (currently: tray, Pi usage command).
+  // Store-only installs skip this step to keep install time short.
+  if (needsWebExplorer(components)) {
+    runWebExplorerInstall(state);
+  } else {
+    section("Web Explorer");
+    const result = state.components.webExplorer;
+    result.skipped = true;
+    result.message = "Web explorer not needed by selected components — skipping build.";
+    warn(result.message);
+  }
+
   runAllOptionalInstalls(components, state);
   writeManifest(state);
   printSummary(state);
