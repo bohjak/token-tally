@@ -238,18 +238,17 @@ function buildApp(db: Database, dbPath: string, updateActivity: () => void) {
     return c.json(result);
   });
 
-  // Static files in production
-  if (process.env.NODE_ENV === "production") {
-    const distClient = join(__dirname, "..", "..", "dist", "client");
-    app.use(
-      "/*",
-      serveStatic({ root: distClient })
-    );
-    app.notFound((c) => {
-      const html = readFileSync(join(distClient, "index.html"), "utf-8");
-      return c.html(html);
-    });
-  }
+  // Static files — served whenever the dist/client build is present.
+  // Not gated on NODE_ENV so the launcher works without setting it.
+  const distClient = join(__dirname, "..", "..", "dist", "client");
+  app.use(
+    "/*",
+    serveStatic({ root: distClient })
+  );
+  app.notFound((c) => {
+    const html = readFileSync(join(distClient, "index.html"), "utf-8");
+    return c.html(html);
+  });
 
   return app;
 }
