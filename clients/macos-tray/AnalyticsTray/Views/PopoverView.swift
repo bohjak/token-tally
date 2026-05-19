@@ -236,6 +236,11 @@ struct PopoverView: View {
             }
             .help("Open analytics data folder in Finder")
 
+            Button(action: openExplorer) {
+                Label("Open Explorer", systemImage: "globe")
+            }
+            .help("Open web analytics explorer")
+
             Spacer()
         }
         .buttonStyle(.plain)
@@ -264,6 +269,42 @@ struct PopoverView: View {
             env.store.refresh()
         }
         closePopover()
+    }
+
+    private func openExplorer() {
+        let dbPath = env.settings.databasePath
+
+        // token-tally explore is the shared launcher command. Spawn it via
+        // /usr/bin/env so token-tally is resolved from the user's PATH.
+        // The tray does not inherit the interactive shell PATH, but common
+        // install locations (/usr/local/bin, ~/.local/bin) are typically
+        // visible to /usr/bin/env on macOS.
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["token-tally", "explore", "--db", dbPath]
+
+        // Fire-and-forget: the explorer server is intentionally long-lived
+        // (it exits after its own idle timeout or on --stop). Redirect stdio
+        // to /dev/null so the child inherits no open file descriptors from
+        // the tray process. We do NOT call waitUntilExit().
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+
+        do {
+            try process.run()
+        } catch {
+            // token-tally is not on PATH. Show a brief actionable alert.
+            let alert = NSAlert()
+            alert.messageText = "token-tally not found"
+            alert.informativeText =
+                "The token-tally CLI could not be launched from PATH.\n\n" +
+                "Run 'make install' with the macOS tray component selected " +
+                "to install it, then relaunch the app."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
     }
 
     private func openAnalyticsFolder() {
