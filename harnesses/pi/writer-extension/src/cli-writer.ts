@@ -13,7 +13,13 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,6 +32,7 @@ import type {
   ToolCallPayload,
   TurnPayload,
 } from "@token-tally/store";
+import type { SpoolRecord } from "@token-tally/store";
 
 // ---------------------------------------------------------------------------
 // Public writer surface used by hook modules
@@ -68,6 +75,9 @@ type InstallManifest = {
 // ---------------------------------------------------------------------------
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const APP_DIR_NAME = "token-tally";
+
+let emergencySpoolCounter = 0;
 
 function extensionRepoRoot(): string {
   const here = dirname(fileURLToPath(import.meta.url));
@@ -154,6 +164,77 @@ function findRepoRoot(manifest: InstallManifest | null): string {
   return manifestString(manifest?.repoPath) ?? extensionRepoRoot();
 }
 
+function defaultDataDir(): string {
+  const xdgDataHome = process.env.XDG_DATA_HOME;
+  const base = xdgDataHome != null && xdgDataHome !== ""
+    ? xdgDataHome
+    : join(homedir(), ".local", "share");
+  return join(base, APP_DIR_NAME);
+}
+
+function defaultSpoolDir(): string {
+  return join(defaultDataDir(), "spool");
+}
+
+function writeEmergencySpool(record: SpoolRecord): void {
+  const spoolDir = defaultSpoolDir();
+  mkdirSync(spoolDir, { recursive: true });
+
+  const sequence = emergencySpoolCounter++;
+  const baseName = `pi-extension-${process.pid}-${Date.now()}-${sequence}.ndjson`;
+  const tmpPath = join(spoolDir, `${baseName}.tmp`);
+  const closedPath = join(spoolDir, `${baseName}.closed`);
+
+  writeFileSync(tmpPath, JSON.stringify(record) + "\n", "utf8");
+  renameSync(tmpPath, closedPath);
+}
+
+function fallbackId(recordType: Exclude<RecordType, "raw-event">, payload: unknown): string {
+  switch (recordType) {
+    case "harness":
+      return (payload as HarnessPayload).name;
+    case "session": {
+      const session = payload as SessionPayload;
+      return `spool:${session.harnessId}:${session.harnessSessionId}`;
+    }
+    case "turn": {
+      const turn = payload as TurnPayload;
+      return `spool:${turn.sessionId}:${turn.harnessTurnId}`;
+    }
+    case "llm-message": {
+      const message = payload as LlmMessagePayload;
+      return `spool:${message.harnessId}:${message.harnessMessageId}`;
+    }
+    case "subscription": {
+      const subscription = payload as SubscriptionPayload;
+      return `spool:${subscription.harnessId}:${subscription.planName}:${subscription.periodStart}`;
+    }
+    case "tool-call": {
+      const toolCall = payload as ToolCallPayload;
+      return `spool:${toolCall.harnessId}:${toolCall.harnessToolCallId}`;
+    }
+  }
+}
+
+function spoolRecord(recordType: RecordType, payload: unknown): SpoolRecord {
+  switch (recordType) {
+    case "harness":
+      return { type: "harness", payload: payload as HarnessPayload };
+    case "session":
+      return { type: "session", payload: payload as SessionPayload };
+    case "turn":
+      return { type: "turn", payload: payload as TurnPayload };
+    case "llm-message":
+      return { type: "llm-message", payload: payload as LlmMessagePayload };
+    case "subscription":
+      return { type: "subscription", payload: payload as SubscriptionPayload };
+    case "tool-call":
+      return { type: "tool-call", payload: payload as ToolCallPayload };
+    case "raw-event":
+      return { type: "raw-event", payload: payload as RawEventPayload };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // CLI-backed writer implementation
 // ---------------------------------------------------------------------------
@@ -203,7 +284,15 @@ class CliAnalyticsWriter implements AnalyticsWriterLike {
   }
 
   async recordRawEvent(payload: RawEventPayload): Promise<void> {
-    await this.record("raw-event", payload);
+    try {
+      await this.record("raw-event", payload);
+    } catch (err: unknown) {
+      writeEmergencySpool(spoolRecord("raw-event", payload));
+      console.warn(
+        "[pi-writer] token-tally record raw-event failed; wrote emergency spool:",
+        err,
+      );
+    }
   }
 
   async close(): Promise<void> {
@@ -215,12 +304,27 @@ class CliAnalyticsWriter implements AnalyticsWriterLike {
     recordType: Exclude<RecordType, "raw-event">,
     payload: unknown,
   ): Promise<WriteResult> {
-    const stdout = await this.record(recordType, payload);
-    const parsed = JSON.parse(stdout) as { id?: unknown };
-    if (typeof parsed.id !== "string" || parsed.id.length === 0) {
-      throw new Error(`token-tally record ${recordType}: missing id in response`);
+    try {
+      const stdout = await this.record(recordType, payload);
+      const parsed = JSON.parse(stdout) as { id?: unknown };
+      if (typeof parsed.id !== "string" || parsed.id.length === 0) {
+        throw new Error(`token-tally record ${recordType}: missing id in response`);
+      }
+      return { id: parsed.id };
+    } catch (err: unknown) {
+      try {
+        writeEmergencySpool(spoolRecord(recordType, payload));
+      } catch (spoolErr: unknown) {
+        console.warn("[pi-writer] emergency spool write failed:", spoolErr);
+        throw err;
+      }
+
+      console.warn(
+        `[pi-writer] token-tally record ${recordType} failed; wrote emergency spool:`,
+        err,
+      );
+      return { id: fallbackId(recordType, payload) };
     }
-    return { id: parsed.id };
   }
 
   private record(recordType: RecordType, payload: unknown): Promise<string> {

@@ -37,7 +37,6 @@ import type { AnalyticsWriterLike } from "../cli-writer.ts";
 import type { PiAPIStub, PiContextStub } from "./types.ts";
 import { getCentralSessionId, getSession } from "./session-state.ts";
 import { getTurn, setActiveModel } from "./turn-state.ts";
-import { computeCostMicros } from "@token-tally/store";
 
 // ---------------------------------------------------------------------------
 // Pi event payload shapes
@@ -66,6 +65,54 @@ type PiMessageEndEvent = {
   };
 };
 
+type LocalRates = {
+  inputPerMTokUSD: number;
+  outputPerMTokUSD: number;
+  cacheReadPerMTokUSD: number;
+  cacheWritePerMTokUSD: number;
+};
+
+type LocalCostBreakdown = {
+  costInputMicros: number;
+  costOutputMicros: number;
+  costCacheReadMicros: number;
+  costCacheWriteMicros: number;
+  costSource: "writer" | "unknown";
+};
+
+const LOCAL_RATES: Array<{ id: string; aliases: string[]; rates: LocalRates }> = [
+  {
+    id: "claude-opus-4-5",
+    aliases: ["claude-opus-4"],
+    rates: {
+      inputPerMTokUSD: 15,
+      outputPerMTokUSD: 75,
+      cacheReadPerMTokUSD: 1.5,
+      cacheWritePerMTokUSD: 18.75,
+    },
+  },
+  {
+    id: "claude-sonnet-4-5",
+    aliases: ["claude-sonnet-4"],
+    rates: {
+      inputPerMTokUSD: 3,
+      outputPerMTokUSD: 15,
+      cacheReadPerMTokUSD: 0.3,
+      cacheWritePerMTokUSD: 3.75,
+    },
+  },
+  {
+    id: "claude-haiku-4-5",
+    aliases: ["claude-haiku-4"],
+    rates: {
+      inputPerMTokUSD: 0.8,
+      outputPerMTokUSD: 4,
+      cacheReadPerMTokUSD: 0.08,
+      cacheWritePerMTokUSD: 1,
+    },
+  },
+];
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -84,6 +131,66 @@ function safeNum(value: number | undefined | null): number {
  */
 function toMicros(usd: number): number {
   return Math.round(usd * 1_000_000);
+}
+
+function tokensToMicros(tokens: number, ratePerMTokUSD: number): number {
+  return Math.round(tokens * ratePerMTokUSD);
+}
+
+function zeroCostBreakdown(): LocalCostBreakdown {
+  return {
+    costInputMicros: 0,
+    costOutputMicros: 0,
+    costCacheReadMicros: 0,
+    costCacheWriteMicros: 0,
+    costSource: "unknown",
+  };
+}
+
+function lookupLocalRates(modelId: string): LocalRates | null {
+  let candidate = modelId;
+
+  while (candidate.length > 0) {
+    for (const entry of LOCAL_RATES) {
+      if (entry.id === candidate || entry.aliases.includes(candidate)) {
+        return entry.rates;
+      }
+      if (entry.id.startsWith(`${candidate}-`)) {
+        return entry.rates;
+      }
+    }
+
+    const lastDash = candidate.lastIndexOf("-");
+    if (lastDash === -1) break;
+    candidate = candidate.slice(0, lastDash);
+  }
+
+  return null;
+}
+
+function computeLocalCostMicros(params: {
+  modelId: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}): LocalCostBreakdown {
+  if (params.modelId == null) {
+    return zeroCostBreakdown();
+  }
+
+  const rates = lookupLocalRates(params.modelId);
+  if (rates == null) {
+    return zeroCostBreakdown();
+  }
+
+  return {
+    costInputMicros: tokensToMicros(params.inputTokens, rates.inputPerMTokUSD),
+    costOutputMicros: tokensToMicros(params.outputTokens, rates.outputPerMTokUSD),
+    costCacheReadMicros: tokensToMicros(params.cacheReadTokens, rates.cacheReadPerMTokUSD),
+    costCacheWriteMicros: tokensToMicros(params.cacheWriteTokens, rates.cacheWritePerMTokUSD),
+    costSource: "writer",
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -165,8 +272,10 @@ export function register(pi: PiAPIStub, writer: AnalyticsWriterLike): void {
         costCacheWriteMicros = toMicros(safeNum(cost?.cacheWrite));
         costSource = "harness";
       } else {
-        // Pi did not emit cost data — compute from the local pricing table.
-        const breakdown = computeCostMicros({
+        // Pi did not emit cost data — compute from a small built-in pricing
+        // table. Keep this local to avoid importing @token-tally/store at
+        // runtime in Pi's Node process (that package loads native SQLite code).
+        const breakdown = computeLocalCostMicros({
           modelId: typeof msg.model === "string" && msg.model.length > 0
             ? msg.model
             : null,
