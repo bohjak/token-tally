@@ -30,6 +30,53 @@ info()  { echo -e "  ${GREEN}✓${RESET}  $*"; }
 warn()  { echo -e "  ${YELLOW}!${RESET}  $*"; }
 err()   { echo -e "  ${RED}✗${RESET}  $*"; }
 
+pnpm_home_ownership_root() {
+  local bin_dir="${1:?bin_dir is required}"
+  local rel top
+  rel="${bin_dir#"${HOME}/"}"
+  top="${rel%%/*}"
+  printf '%s/%s' "${HOME}" "${top}"
+}
+
+ensure_pnpm_global_bin_writable() {
+  local bin_dir
+  bin_dir=$(pnpm bin -g 2>/dev/null || true)
+
+  # pnpm will print its own detailed setup error during global installs if
+  # the global bin has not been configured. When it is configured, fail early
+  # with a clearer permissions diagnosis than pnpm's raw EACCES stack trace.
+  if [[ -z "${bin_dir}" ]]; then
+    return 0
+  fi
+
+  if ! mkdir -p "${bin_dir}" 2>/dev/null; then
+    err "Cannot create pnpm global bin directory: ${bin_dir}"
+    if [[ "${bin_dir}" == "${HOME}/"* ]]; then
+      local ownership_root
+      ownership_root=$(pnpm_home_ownership_root "${bin_dir}")
+      err "  A parent directory under your home is not writable by $(id -un)."
+      err "  Fix ownership, then re-run make install:"
+      err "    sudo chown -R \"$(id -un):$(id -gn)\" \"${ownership_root}\""
+    else
+      err "  Make this directory writable, or reconfigure pnpm's global bin."
+    fi
+    return 1
+  fi
+
+  if [[ ! -w "${bin_dir}" ]]; then
+    err "pnpm global bin directory is not writable: ${bin_dir}"
+    if [[ "${bin_dir}" == "${HOME}/"* ]]; then
+      local ownership_root
+      ownership_root=$(pnpm_home_ownership_root "${bin_dir}")
+      err "  Fix ownership, then re-run make install:"
+      err "    sudo chown -R \"$(id -un):$(id -gn)\" \"${ownership_root}\""
+    else
+      err "  Make this directory writable, or reconfigure pnpm's global bin."
+    fi
+    return 1
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -57,6 +104,8 @@ main() {
     return 1
   fi
 
+  ensure_pnpm_global_bin_writable || return 1
+
   # ---- Install pnpm workspace dependencies ----
   # --frozen-lockfile ensures no accidental lockfile mutation during install.
   # We do NOT pipe through sed so that native-addon postinstall output reaches
@@ -78,12 +127,12 @@ main() {
   info "@token-tally/store built"
 
   # ---- Link the token-tally binary globally ----
-  # pnpm link --global, run from the store package directory, makes
-  # `token-tally` available in $PATH via pnpm's global bin dir.
-  # This is idempotent: relinking updates the symlink to the current package.
+  # pnpm 11 requires `pnpm link` to receive a target directory, so install the
+  # local package globally instead. This makes `token-tally` available in $PATH
+  # via pnpm's global bin dir and is idempotent for local development installs.
   echo "  Linking token-tally CLI globally…"
-  (cd "${repo_root}/store" && pnpm link --global --silent) 2>&1 | sed 's/^/    /' || {
-    err "pnpm link --global failed"
+  pnpm add --global "${repo_root}/store" --silent 2>&1 | sed 's/^/    /' || {
+    err "pnpm add --global failed"
     err "  If using a managed node version, ensure pnpm's global bin is in PATH."
     return 1
   }

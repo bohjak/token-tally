@@ -182,6 +182,28 @@ the login-item state is not modified — existing preferences are preserved.
 
 ---
 
+## If pnpm's global bin is not writable
+
+The store step links the `token-tally` CLI with `pnpm add --global ./store`. If pnpm's
+global bin directory is under your home directory but owned by another user,
+installation fails before linking. For example:
+
+```text
+EACCES: permission denied, mkdir '~/.local/share/pnpm/bin'
+```
+
+Fix the ownership of the affected user-local directory, then re-run
+`make install`:
+
+```sh
+sudo chown -R "$(id -un):$(id -gn)" "$HOME/.local"
+```
+
+Do **not** run `sudo make install`; that can create more root-owned files in the
+repo and in your user config.
+
+---
+
 ## If `/Applications` is not writable
 
 If the current user cannot write to `/Applications`, the installer exits with a

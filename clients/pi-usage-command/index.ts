@@ -183,7 +183,7 @@ function registerDoctorCommand(pi: ExtensionAPI): void {
         // token-tally binary not found or failed to spawn.
         notify(
           `[token-tally:doctor] Cannot run 'token-tally doctor': ${result.error.message}\n` +
-          "Ensure the store CLI is installed: run 'make install' or 'cd store && pnpm link --global'.",
+          "Ensure the store CLI is installed: run 'make install' or 'pnpm add -g ./store'.",
           "error"
         );
         return;

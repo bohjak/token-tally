@@ -171,7 +171,7 @@ run_safe_checks() {
   # ---- 1. Prerequisites ----
   section "Prerequisites"
   if ! require_cmd "token-tally"; then
-    fail "token-tally not found — run 'cd store && pnpm link --global' first"
+    fail "token-tally not found — run 'make install' or 'pnpm add -g ./store' first"
     return
   fi
   pass "token-tally found at $(command -v token-tally)"
