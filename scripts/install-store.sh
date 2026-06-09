@@ -3,9 +3,15 @@
 #
 # Responsibilities:
 #   1. Install npm dependencies (pnpm install, idempotent).
-#   2. Build the store TypeScript package.
-#   3. Link the token-tally binary globally via pnpm.
+#   2. Build the SEA (Single Executable Application) binary.
+#   3. Install the binary to ~/.local/share/token-tally/bin/ and symlink it
+#      into ~/.local/bin/ so it is reachable on PATH.
 #   4. Create or migrate the central SQLite database.
+#
+# The SEA binary bundles a specific Node.js version, so the CLI is immune to
+# Node version changes in the user's environment.  The native SQLite addon
+# (better_sqlite3.node) cannot be embedded in the SEA blob and is distributed
+# alongside the binary in the same directory.
 #
 # Arguments:
 #   $1  REPO_ROOT   — absolute path to the repository root
@@ -29,53 +35,6 @@ fi
 info()  { echo -e "  ${GREEN}✓${RESET}  $*"; }
 warn()  { echo -e "  ${YELLOW}!${RESET}  $*"; }
 err()   { echo -e "  ${RED}✗${RESET}  $*"; }
-
-pnpm_home_ownership_root() {
-  local bin_dir="${1:?bin_dir is required}"
-  local rel top
-  rel="${bin_dir#"${HOME}/"}"
-  top="${rel%%/*}"
-  printf '%s/%s' "${HOME}" "${top}"
-}
-
-ensure_pnpm_global_bin_writable() {
-  local bin_dir
-  bin_dir=$(pnpm bin -g 2>/dev/null || true)
-
-  # pnpm will print its own detailed setup error during global installs if
-  # the global bin has not been configured. When it is configured, fail early
-  # with a clearer permissions diagnosis than pnpm's raw EACCES stack trace.
-  if [[ -z "${bin_dir}" ]]; then
-    return 0
-  fi
-
-  if ! mkdir -p "${bin_dir}" 2>/dev/null; then
-    err "Cannot create pnpm global bin directory: ${bin_dir}"
-    if [[ "${bin_dir}" == "${HOME}/"* ]]; then
-      local ownership_root
-      ownership_root=$(pnpm_home_ownership_root "${bin_dir}")
-      err "  A parent directory under your home is not writable by $(id -un)."
-      err "  Fix ownership, then re-run make install:"
-      err "    sudo chown -R \"$(id -un):$(id -gn)\" \"${ownership_root}\""
-    else
-      err "  Make this directory writable, or reconfigure pnpm's global bin."
-    fi
-    return 1
-  fi
-
-  if [[ ! -w "${bin_dir}" ]]; then
-    err "pnpm global bin directory is not writable: ${bin_dir}"
-    if [[ "${bin_dir}" == "${HOME}/"* ]]; then
-      local ownership_root
-      ownership_root=$(pnpm_home_ownership_root "${bin_dir}")
-      err "  Fix ownership, then re-run make install:"
-      err "    sudo chown -R \"$(id -un):$(id -gn)\" \"${ownership_root}\""
-    else
-      err "  Make this directory writable, or reconfigure pnpm's global bin."
-    fi
-    return 1
-  fi
-}
 
 # ---------------------------------------------------------------------------
 # Main
@@ -104,8 +63,6 @@ main() {
     return 1
   fi
 
-  ensure_pnpm_global_bin_writable || return 1
-
   # ---- Install pnpm workspace dependencies ----
   # --frozen-lockfile ensures no accidental lockfile mutation during install.
   # We do NOT pipe through sed so that native-addon postinstall output reaches
@@ -117,33 +74,41 @@ main() {
   }
   info "npm dependencies up to date"
 
-  # ---- Build the store package ----
-  # tsc compiles store/src/** and store/cli/** → store/dist/
-  echo "  Building @token-tally/store…"
-  pnpm --filter @token-tally/store --dir "${repo_root}" build 2>&1 | sed 's/^/    /' || {
-    err "@token-tally/store build failed"
+  # ---- Build the SEA binary ----
+  # build:sea runs tsc then esbuild + Node SEA tooling, producing:
+  #   store/dist/sea/token-tally          — self-contained executable
+  #   store/dist/sea/better_sqlite3.node  — native SQLite addon
+  echo "  Building @token-tally/store SEA binary…"
+  pnpm --filter @token-tally/store --dir "${repo_root}" build:sea 2>&1 | sed 's/^/    /' || {
+    err "@token-tally/store build:sea failed"
     return 1
   }
-  info "@token-tally/store built"
+  info "@token-tally/store SEA binary built"
 
-  # ---- Link the token-tally binary globally ----
-  # pnpm 11 requires `pnpm link` to receive a target directory, so install the
-  # local package globally instead. This makes `token-tally` available in $PATH
-  # via pnpm's global bin dir and is idempotent for local development installs.
-  echo "  Linking token-tally CLI globally…"
-  pnpm add --global "${repo_root}/store" --silent 2>&1 | sed 's/^/    /' || {
-    err "pnpm add --global failed"
-    err "  If using a managed node version, ensure pnpm's global bin is in PATH."
-    return 1
-  }
-  info "token-tally CLI linked"
+  # ---- Install the SEA binary ----
+  # Both the binary and the native addon must live in the same directory so
+  # the bindings shim can locate the addon via path.dirname(process.execPath).
+  local sea_dir
+  sea_dir="${XDG_DATA_HOME:-${HOME}/.local/share}/token-tally/bin"
+  mkdir -p "${sea_dir}"
+  cp "${repo_root}/store/dist/sea/token-tally" "${sea_dir}/token-tally"
+  cp "${repo_root}/store/dist/sea/better_sqlite3.node" "${sea_dir}/better_sqlite3.node"
+  chmod +x "${sea_dir}/token-tally"
+  info "SEA binary installed to ${sea_dir}/"
+
+  # ---- Symlink into ~/.local/bin ----
+  local local_bin="${HOME}/.local/bin"
+  mkdir -p "${local_bin}"
+  ln -sf "${sea_dir}/token-tally" "${local_bin}/token-tally"
+  info "token-tally symlinked at ${local_bin}/token-tally"
 
   # ---- Verify the CLI is reachable ----
   if ! command -v token-tally &>/dev/null; then
-    warn "token-tally not found in PATH after linking."
-    warn "Add '$(pnpm bin -g)' to your PATH in ~/.zshrc or ~/.bash_profile."
+    warn "token-tally not found in PATH."
+    warn "Add '${local_bin}' to your PATH in ~/.zshrc or ~/.bash_profile:"
+    warn "  export PATH=\"\${HOME}/.local/bin:\${PATH}\""
     warn "Continuing — 'make doctor' will recheck this."
-    # Not fatal: the user can add it to PATH later; migration below uses the node path.
+    # Not fatal: the user can add it to PATH later; migration below uses the full path.
   fi
 
   # ---- Create or migrate the central database ----
@@ -151,8 +116,8 @@ main() {
   mkdir -p "${data_dir}"
   echo "  Migrating database at ${db_path}…"
 
-  # Invoke via node directly in case token-tally isn't in PATH yet.
-  if node "${repo_root}/store/bin/token-tally.js" migrate --db "${db_path}"; then
+  # Invoke via full path in case token-tally isn't in PATH yet.
+  if "${sea_dir}/token-tally" migrate --db "${db_path}"; then
     info "Database ready at ${db_path}"
   else
     err "Database migration failed"
