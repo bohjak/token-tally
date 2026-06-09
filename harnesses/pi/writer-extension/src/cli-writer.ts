@@ -74,7 +74,10 @@ type InstallManifest = {
 // Runtime discovery
 // ---------------------------------------------------------------------------
 
-const DEFAULT_TIMEOUT_MS = 10_000;
+// Must exceed the maximum SQLite busy-wait budget:
+//   busy_timeout (5 000 ms, SQLite-internal) + withBusyRetry (10 000 ms) = 15 s.
+// Add a generous process-startup buffer on top.
+const DEFAULT_TIMEOUT_MS = 25_000;
 const APP_DIR_NAME = "token-tally";
 
 let emergencySpoolCounter = 0;
@@ -176,6 +179,16 @@ function defaultSpoolDir(): string {
   return join(defaultDataDir(), "spool");
 }
 
+/**
+ * Returns the path to the SEA binary if it has been installed, otherwise null.
+ * The SEA binary is installed by install-store.sh alongside better_sqlite3.node
+ * in $XDG_DATA_HOME/token-tally/bin/.
+ */
+function findSeaBinary(): string | null {
+  const binPath = join(defaultDataDir(), "bin", "token-tally");
+  return existsSync(binPath) ? binPath : null;
+}
+
 function writeEmergencySpool(record: SpoolRecord): void {
   const spoolDir = defaultSpoolDir();
   mkdirSync(spoolDir, { recursive: true });
@@ -240,6 +253,14 @@ function spoolRecord(recordType: RecordType, payload: unknown): SpoolRecord {
 // ---------------------------------------------------------------------------
 
 export function createCliAnalyticsWriter(): AnalyticsWriterLike {
+  // Prefer the SEA binary: it embeds its own Node runtime so there is no ABI
+  // mismatch risk and no version-probe overhead at startup.
+  const seaBinary = findSeaBinary();
+  if (seaBinary != null) {
+    return new CliAnalyticsWriter(seaBinary, [], seaBinary);
+  }
+
+  // Fallback: run the compiled JS bin via a compatible Node interpreter.
   const manifest = readManifest();
   const repoRoot = findRepoRoot(manifest);
   const nodePath = findNodePath(manifest);
@@ -249,13 +270,19 @@ export function createCliAnalyticsWriter(): AnalyticsWriterLike {
     throw new Error(`token-tally CLI not found at ${tokenTallyBin}`);
   }
 
-  return new CliAnalyticsWriter(nodePath, tokenTallyBin, repoRoot);
+  return new CliAnalyticsWriter(nodePath, [tokenTallyBin], repoRoot);
 }
 
 class CliAnalyticsWriter implements AnalyticsWriterLike {
+  /**
+   * @param binary      The executable to spawn (SEA binary or Node interpreter).
+   * @param prefixArgs  Arguments prepended before the token-tally subcommand
+   *                    (empty for SEA, [tokenTallyBin] for the JS fallback).
+   * @param cwd         Working directory for the child process.
+   */
   constructor(
-    private readonly nodePath: string,
-    private readonly tokenTallyBin: string,
+    private readonly binary: string,
+    private readonly prefixArgs: string[],
     private readonly cwd: string,
   ) {}
 
@@ -330,7 +357,7 @@ class CliAnalyticsWriter implements AnalyticsWriterLike {
   private record(recordType: RecordType, payload: unknown): Promise<string> {
     const json = JSON.stringify(payload);
     const args = [
-      this.tokenTallyBin,
+      ...this.prefixArgs,
       "record",
       "--type",
       recordType,
@@ -339,7 +366,7 @@ class CliAnalyticsWriter implements AnalyticsWriterLike {
     ];
 
     return new Promise((resolvePromise, reject) => {
-      const child = spawn(this.nodePath, args, {
+      const child = spawn(this.binary, args, {
         cwd: this.cwd,
         env: process.env,
         stdio: ["ignore", "pipe", "pipe"],
