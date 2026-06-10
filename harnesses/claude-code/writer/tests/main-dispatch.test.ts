@@ -245,3 +245,71 @@ test("idempotency: replaying all hooks produces no new rows", async () => {
   // Clean up temp dir
   fs.rmSync(sharedTmpDir, { recursive: true, force: true });
 });
+
+// ---------------------------------------------------------------------------
+// Test 3: Spool isolation — extra closed spool files are not drained by hooks
+// ---------------------------------------------------------------------------
+
+test("spool isolation: hook invocations do not drain pre-existing closed spool files", async () => {
+  // This test proves the drain: {} semantics are in effect for hot-path hooks.
+  // Extra closed spool files in the spool directory must survive the full
+  // hook sequence intact. The drain daemon (T6) owns full-directory drain.
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tt-cc-spool-isolation-"));
+  const xdgDataHome = path.join(tmpDir, "data");
+  const xdgStateHome = path.join(tmpDir, "state");
+  fs.mkdirSync(xdgDataHome, { recursive: true });
+  fs.mkdirSync(xdgStateHome, { recursive: true });
+
+  const spoolDir = path.join(xdgDataHome, "token-tally", "spool");
+  fs.mkdirSync(spoolDir, { recursive: true });
+
+  const env = { XDG_DATA_HOME: xdgDataHome, XDG_STATE_HOME: xdgStateHome };
+
+  // Plant three synthetic closed spool files that would fail ingest
+  // (they contain valid JSON but reference non-existent parent rows).
+  // If the hook drains the spool directory, it would attempt these files
+  // and likely delete or quarantine them. We assert they survive untouched.
+  const spoolFileNames = [
+    "claude-code-99001-1700000000001-1700000000002.ndjson.closed",
+    "claude-code-99002-1700000000003-1700000000004.ndjson.closed",
+    "claude-code-99003-1700000000005-1700000000006.ndjson.closed",
+  ];
+  for (const name of spoolFileNames) {
+    fs.writeFileSync(
+      path.join(spoolDir, name),
+      JSON.stringify({
+        type: "llm-message",
+        payload: {
+          harnessId: "claude-code",
+          sessionId: "spool:claude-code:orphan-session",
+          turnId: "spool:spool:claude-code:orphan-session:orphan-turn",
+          harnessMessageId: "orphan-msg-1",
+          ts: 1700000000000,
+        },
+      }) + "\n",
+      "utf8",
+    );
+  }
+
+  // Run a minimal hook sequence (just SessionStart) — enough to open and
+  // close a writer, which is the point where drain could occur.
+  const transcriptPath = path.join(tmpDir, "transcript.jsonl");
+  fs.copyFileSync(
+    path.join(FIXTURES_DIR, "transcript-basic.jsonl"),
+    transcriptPath,
+  );
+  const startPayload = withTranscript(loadFixture("hooks/session-start.json"), transcriptPath);
+  const { exitCode, stderr } = runHook(startPayload, env);
+  assert.equal(exitCode, 0, `SessionStart hook failed: ${stderr.slice(0, 400)}`);
+
+  // All three pre-planted closed files must still be present.
+  for (const name of spoolFileNames) {
+    assert.ok(
+      fs.existsSync(path.join(spoolDir, name)),
+      `pre-planted spool file should not be touched by hot-path hook: ${name}`,
+    );
+  }
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});

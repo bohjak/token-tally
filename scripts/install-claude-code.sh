@@ -184,6 +184,12 @@ main() {
 
   merge_settings "${settings_path}" "token-tally-claude-hook"
   info "Claude Code hooks merged into ${settings_path}"
+
+  # ---- Daemon note ----
+  # The claude-code hook writer does not trigger full-directory spool drain.
+  # The token-tally drain daemon handles background persistence.
+  # See 'token-tally daemon --help' for usage. Do not register the daemon
+  # with launchd/cron yet — failed-file quarantine (T8) must land first.
 }
 
 main "$@"

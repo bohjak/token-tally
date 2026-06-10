@@ -312,3 +312,69 @@ test("postToolUseFailure: tool call recorded with is_error = 1", async () => {
 
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
+
+// ---------------------------------------------------------------------------
+// Test 6: Spool isolation — extra closed spool files are not drained by hooks
+// ---------------------------------------------------------------------------
+
+test("spool isolation: hook invocations do not drain pre-existing closed spool files", async () => {
+  // Proves drain: {} semantics are in effect for the Cursor hot-path hook.
+  // Extra closed spool files in the spool directory must survive the full
+  // hook sequence intact. The drain daemon (T6) owns full-directory drain.
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tt-cursor-spool-isolation-"));
+  const xdgDataHome = path.join(tmpDir, "data");
+  const xdgStateHome = path.join(tmpDir, "state");
+  fs.mkdirSync(xdgDataHome, { recursive: true });
+  fs.mkdirSync(xdgStateHome, { recursive: true });
+
+  const spoolDir = path.join(xdgDataHome, "token-tally", "spool");
+  fs.mkdirSync(spoolDir, { recursive: true });
+
+  const env = {
+    XDG_DATA_HOME: xdgDataHome,
+    XDG_STATE_HOME: xdgStateHome,
+    XDG_CONFIG_HOME: path.join(tmpDir, "config"),
+  };
+
+  // Plant three synthetic closed spool files that would fail ingest
+  // (they reference non-existent parent rows). If the hook drains the spool
+  // directory, it would attempt these files. We assert they survive untouched.
+  const spoolFileNames = [
+    "cursor-99001-1700000000001-1700000000002.ndjson.closed",
+    "cursor-99002-1700000000003-1700000000004.ndjson.closed",
+    "cursor-99003-1700000000005-1700000000006.ndjson.closed",
+  ];
+  for (const name of spoolFileNames) {
+    fs.writeFileSync(
+      path.join(spoolDir, name),
+      JSON.stringify({
+        type: "llm-message",
+        payload: {
+          harnessId: "cursor",
+          sessionId: "spool:cursor:orphan-conv",
+          turnId: "spool:spool:cursor:orphan-conv:orphan-turn",
+          harnessMessageId: "cursor:orphan-conv:orphan-gen:assistant",
+          ts: 1700000000000,
+        },
+      }) + "\n",
+      "utf8",
+    );
+  }
+
+  // Run a sessionStart hook — enough to open and close a writer, which is
+  // the point where drain could occur.
+  const startPayload = loadFixture("hooks/session-start.json");
+  const { exitCode, stderr } = runHook(startPayload, env);
+  assert.equal(exitCode, 0, `sessionStart hook failed: ${stderr.slice(0, 400)}`);
+
+  // All three pre-planted closed files must still be present.
+  for (const name of spoolFileNames) {
+    assert.ok(
+      fs.existsSync(path.join(spoolDir, name)),
+      `pre-planted spool file should not be touched by hot-path hook: ${name}`,
+    );
+  }
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});

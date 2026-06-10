@@ -152,7 +152,16 @@ export async function run(): Promise<void> {
   // ── 4. Open AnalyticsWriter ────────────────────────────────────────────────
   let writer: AnalyticsWriter;
   try {
-    writer = await AnalyticsWriter.open({ harnessName: "claude-code" });
+    writer = await AnalyticsWriter.open({
+      harnessName: "claude-code",
+      // Hot-path hook: explicitly opt out of full-directory spool drain.
+      // Each hook invocation is a short-lived one-shot process — scanning
+      // and draining the whole spool directory on every tool call or session
+      // event would cause high CPU and latency when a large backlog exists.
+      // The drain daemon (T6) owns full-directory drain. On close(), the
+      // writer still drains its own just-rotated file (one file, bounded).
+      drain: {},
+    });
   } catch (err) {
     console.warn("[claude-code-writer] failed to open AnalyticsWriter:", err);
     return;
@@ -167,7 +176,8 @@ export async function run(): Promise<void> {
   } catch (err) {
     console.warn("[claude-code-writer]", err);
   } finally {
-    // Always close: rotates the active spool file and drains closed spools.
+    // Always close: rotates the active spool file so the drain daemon can
+    // pick it up. Does NOT drain the full spool directory (see drain: {} above).
     // Errors here are best-effort — we cannot do anything useful with them.
     try {
       await writer.close();

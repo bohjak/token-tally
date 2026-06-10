@@ -233,6 +233,12 @@ main() {
   # Merge owned hook entries into ~/.cursor/hooks.json in Cursor-native format.
   merge_hooks "${hooks_path}" "token-tally-cursor-hook"
   info "Cursor hooks merged into ${hooks_path}"
+
+  # ---- Daemon note ----
+  # The cursor hook writer does not trigger full-directory spool drain.
+  # The token-tally drain daemon handles background persistence.
+  # See 'token-tally daemon --help' for usage. Do not register the daemon
+  # with launchd/cron yet — failed-file quarantine (T8) must land first.
 }
 
 main "$@"
