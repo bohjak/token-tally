@@ -43,8 +43,8 @@ import {
 } from "./connection";
 import { runMigrations } from "./migrations";
 import { defaultDatabasePath, defaultSpoolDir } from "./paths";
-import { SpoolWriter, drainClosedSpoolFiles } from "./spool";
-import type { SpoolRecord } from "./spool";
+import { SpoolWriter, drainClosedSpoolFiles, drainSingleSpoolFile } from "./spool";
+import type { BoundedDrainOptions, SpoolRecord } from "./spool";
 import type {
   HarnessPayload,
   LlmMessagePayload,
@@ -56,6 +56,58 @@ import type {
   TurnPayload,
   WriterOptions,
 } from "./types";
+
+// ---------------------------------------------------------------------------
+// Drain options
+// ---------------------------------------------------------------------------
+
+/**
+ * Controls when and how aggressively AnalyticsWriter drains closed spool files.
+ *
+ * The default for all fields is `false` / no limit. Hot-path callers —
+ * one-shot CLI `record`, Pi/Cursor/Claude hooks — should accept the defaults
+ * so they never trigger an expensive full-directory scan.
+ *
+ * Long-running or background processes — the drain daemon, manual ingest —
+ * should pass `{ onOpen: true }` or `{ onClose: true }` to opt in to
+ * full-directory drain, and can add `maxFiles` / `maxMs` to bound each pass.
+ */
+export type WriterDrainOptions = BoundedDrainOptions & {
+  /**
+   * Drain all closed spool files in the spool directory when the writer opens.
+   * Default: false.
+   *
+   * Set to `true` for the drain daemon, manual `token-tally ingest`, and any
+   * caller that deliberately wants to sweep up accumulated spool files.
+   */
+  onOpen?: boolean;
+
+  /**
+   * Drain all closed spool files in the spool directory when the writer closes.
+   * Default: false.
+   *
+   * Note: the writer ALWAYS drains its own just-rotated file on close
+   * regardless of this flag — that is bounded to one file and is the
+   * lightweight durability guarantee. This flag adds a full-directory sweep
+   * on top of the per-writer drain.
+   */
+  onClose?: boolean;
+};
+
+/**
+ * Options accepted by `AnalyticsWriter.open()`.
+ *
+ * Extends `WriterOptions` with explicit drain control. All drain fields
+ * default to off so short-lived hot-path callers pay no spool-scan overhead.
+ */
+export type WriterOpenOptions = WriterOptions & {
+  /**
+   * Drain configuration for this writer. Omit (or leave `undefined`) for the
+   * safe hot-path default: no full-directory drain on open or close, only the
+   * writer's own just-rotated file is drained on close.
+   */
+  drain?: WriterDrainOptions;
+};
 
 // ---------------------------------------------------------------------------
 // Prepared statement bundle
@@ -533,16 +585,19 @@ export class AnalyticsWriter {
   private readonly dbState: WriterDbState;
   private readonly spool: SpoolWriter;
   private readonly spoolDir: string;
+  private readonly drainOptions: WriterDrainOptions;
   private closed = false;
 
   private constructor(
     dbState: WriterDbState,
     spool: SpoolWriter,
-    spoolDir: string
+    spoolDir: string,
+    drainOptions: WriterDrainOptions
   ) {
     this.dbState = dbState;
     this.spool = spool;
     this.spoolDir = spoolDir;
+    this.drainOptions = drainOptions;
   }
 
   // -------------------------------------------------------------------------
@@ -552,17 +607,31 @@ export class AnalyticsWriter {
   /**
    * Opens the central store for writing.
    *
-   * Tries to connect to the SQLite DB, runs pending migrations, and drains
-   * any closed spool files. If the DB is unavailable or its schema is in the
-   * degraded range, the writer falls back to spool-only mode silently.
+   * Tries to connect to the SQLite DB and runs pending migrations. If the DB
+   * is unavailable or its schema is in the degraded range the writer falls
+   * back to spool-only mode silently.
+   *
+   * By default, no full-directory spool drain is performed on open or close.
+   * Hot-path callers (one-shot CLI, harness hooks) rely on this default so
+   * they never pay a directory-scan penalty.
+   *
+   * Pass `drain: { onOpen: true }` for the drain daemon or manual ingest to
+   * sweep up accumulated spool files. `drain: { maxFiles, maxMs }` bounds
+   * each pass.
+   *
+   * On `close()`, the writer ALWAYS drains its own just-rotated spool file
+   * (one file, bounded by definition) regardless of drain options. This is
+   * the lightweight per-writer durability guarantee.
    *
    * Throws only when the DB schema version is too far ahead of this binary
-   * (past the forward window) — this requires updating the package.
+   * (past the forward window) — that requires updating the package.
    */
-  static async open(options?: WriterOptions): Promise<AnalyticsWriter> {
+  static async open(options?: WriterOpenOptions): Promise<AnalyticsWriter> {
     const dbPath = options?.dbPath ?? defaultDatabasePath();
     const spoolDir = options?.spoolDir ?? defaultSpoolDir();
     const harnessName = options?.harnessName ?? "unknown";
+    // Capture drain options once; default to no full-directory drain.
+    const drainOptions: WriterDrainOptions = options?.drain ?? {};
 
     const spool = new SpoolWriter(spoolDir, harnessName);
     const outcome = tryOpenDb(dbPath);
@@ -582,11 +651,11 @@ export class AnalyticsWriter {
         ? { writable: true, db: outcome.db, stmts: outcome.stmts }
         : { writable: false };
 
-    const writer = new AnalyticsWriter(dbState, spool, spoolDir);
+    const writer = new AnalyticsWriter(dbState, spool, spoolDir, drainOptions);
 
-    if (dbState.writable) {
-      // Best-effort: drain closed spool files from previous sessions.
-      // Drain errors are not fatal — they're left for the next open or manual ingest.
+    if (dbState.writable && drainOptions.onOpen === true) {
+      // Full-directory drain is opt-in. Errors are soft — left for the daemon
+      // or manual ingest. Bounds (maxFiles, maxMs) are respected.
       writer.runSpoolDrain();
     }
 
@@ -694,20 +763,36 @@ export class AnalyticsWriter {
   // -------------------------------------------------------------------------
 
   /**
-   * Rotates the active spool file and drains all closed spool files into the
-   * DB (if available). Useful for long-running writers that want to guarantee
-   * durability at known checkpoints.
+   * Rotates the active spool file and drains it into the DB (if available).
+   *
+   * Only the writer's own just-rotated file is drained by default (bounded
+   * to one file). Set `drain: { onClose: true }` in `open()` options to also
+   * trigger a full-directory sweep.
+   *
+   * Useful for long-running writers that want durability at known checkpoints.
    */
   async flush(): Promise<void> {
     this.assertOpen();
-    this.spool.rotate();
+    const closedPath = this.spool.rotate();
     if (this.dbState.writable) {
-      this.runSpoolDrain();
+      // Always drain the writer's own rotated file (one file, low overhead).
+      if (closedPath != null) {
+        this.runSingleFileDrain(closedPath);
+      }
+      // Full-directory drain only when the caller explicitly opted in.
+      if (this.drainOptions.onClose === true) {
+        this.runSpoolDrain();
+      }
     }
   }
 
   /**
    * Flushes, then closes the database connection.
+   *
+   * The writer's own active spool file is rotated and drained (bounded to that
+   * one file). A full-directory drain is performed only when `drain.onClose`
+   * was set in `open()` options — hot-path callers leave accumulated spool
+   * files for the daemon or manual ingest.
    *
    * After `close()`, all further record calls will throw.
    */
@@ -715,12 +800,22 @@ export class AnalyticsWriter {
     this.assertOpen();
     this.closed = true;
 
-    // Rotate the active spool file so its events can be drained.
-    this.spool.rotate();
+    // Rotate the active spool file so its events are eligible for drain.
+    const closedPath = this.spool.rotate();
 
     if (this.dbState.writable) {
-      // Drain any newly-closed spool files (including the one we just rotated).
-      this.runSpoolDrain();
+      // Always drain the writer's own just-rotated file (bounded to one file).
+      // This is the lightweight per-writer durability guarantee: records that
+      // fell back to spool during this session are committed before the DB
+      // connection closes, without scanning unrelated closed files.
+      if (closedPath != null) {
+        this.runSingleFileDrain(closedPath);
+      }
+      // Full-directory drain is opt-in to avoid scanning thousands of old
+      // files on every hook invocation or one-shot record call.
+      if (this.drainOptions.onClose === true) {
+        this.runSpoolDrain();
+      }
       this.dbState.db.close();
     }
   }
@@ -783,7 +878,37 @@ export class AnalyticsWriter {
       }
     });
 
-    drainClosedSpoolFiles(this.spoolDir, (records) => {
+    drainClosedSpoolFiles(
+      this.spoolDir,
+      (records) => {
+        drainTransaction(records);
+      },
+      this.drainOptions,
+    );
+  }
+
+  /**
+   * Drains one specific closed spool file into the DB. Used for the writer's
+   * own just-rotated file so close/flush can preserve durability without a
+   * full-directory scan.
+   */
+  private runSingleFileDrain(filePath: string): void {
+    if (!this.dbState.writable) return;
+
+    const { db, stmts } = this.dbState;
+    const drainTransaction = db.transaction((records: SpoolRecord[]) => {
+      const maps: SpoolDrainIdMaps = {
+        sessions: new Map(),
+        turns: new Map(),
+        subscriptions: new Map(),
+      };
+
+      for (const record of records) {
+        dispatchSpoolRecord(stmts, maps, record);
+      }
+    });
+
+    drainSingleSpoolFile(filePath, (records) => {
       drainTransaction(records);
     });
   }

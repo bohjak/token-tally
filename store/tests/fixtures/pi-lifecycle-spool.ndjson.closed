@@ -1,0 +1,5 @@
+{"type":"harness","payload":{"name":"pi","displayName":"Pi","version":"1.0.0"}}
+{"type":"session","payload":{"harnessId":"pi","harnessSessionId":"lifecycle-sess-001","startedAt":1000000}}
+{"type":"turn","payload":{"harnessId":"pi","sessionId":"spool:pi:lifecycle-sess-001","harnessTurnId":"lifecycle-turn-001","turnIndex":0,"startedAt":1100000}}
+{"type":"llm-message","payload":{"harnessId":"pi","sessionId":"spool:pi:lifecycle-sess-001","turnId":"spool:spool:pi:lifecycle-sess-001:lifecycle-turn-001","harnessMessageId":"lifecycle-msg-001","ts":1200000,"provider":"anthropic","modelId":"claude-opus-4-5","inputTokens":100,"outputTokens":50,"costInputMicros":1500,"costOutputMicros":1250,"costTotalMicros":2750,"costSource":"writer"}}
+{"type":"tool-call","payload":{"harnessId":"pi","sessionId":"spool:pi:lifecycle-sess-001","turnId":"spool:spool:pi:lifecycle-sess-001:lifecycle-turn-001","harnessToolCallId":"lifecycle-tool-001","toolName":"read","startedAt":1150000,"endedAt":1180000,"isError":false}}

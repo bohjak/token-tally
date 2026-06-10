@@ -12,6 +12,7 @@ export * from "./types";
 
 // T5 — writer, connection, spool
 export { AnalyticsWriter } from "./writer";
+export type { WriterDrainOptions, WriterOpenOptions } from "./writer";
 export {
   MIN_SUPPORTED_SCHEMA_VERSION,
   MAX_KNOWN_SCHEMA_VERSION,
@@ -21,8 +22,8 @@ export {
   withBusyRetry,
 } from "./connection";
 export { runMigrations } from "./migrations";
-export { SpoolWriter, drainClosedSpoolFiles } from "./spool";
-export type { SpoolRecord, DrainResult } from "./spool";
+export { SpoolWriter, drainClosedSpoolFiles, drainSingleSpoolFile, promoteStaleActiveFiles } from "./spool";
+export type { SpoolRecord, DrainResult, BoundedDrainOptions, PromoteResult, PromotedEntry } from "./spool";
 
 // T6 — doctor, ingest
 export { runDoctor, formatDoctorReport } from "./doctor";
