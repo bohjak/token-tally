@@ -47,32 +47,45 @@ The installer then runs each selected component in order:
    binary location depends on your pnpm configuration (typically
    `~/.local/share/pnpm/` or `~/.pnpm/`).
 
-2. **Web Explorer** (conditional) — builds `@token-tally/web-explorer`: the
+2. **Drain daemon** — registers `token-tally daemon` with the platform init
+   system so it runs in the background, starts at login, and restarts on
+   crash. On macOS this writes a launchd plist to
+   `~/Library/LaunchAgents/com.token-tally.daemon.plist` and loads it with
+   `launchctl`. On Linux it writes a systemd user unit to
+   `~/.config/systemd/user/token-tally-daemon.service` and enables it with
+   `systemctl --user`. The daemon drains spool files written by each harness
+   into the database every 30 seconds and promotes abandoned spool files left
+   by crashed writer processes. Daemon output is appended to
+   `~/.local/state/token-tally/logs/daemon.log`. If registration fails (or on
+   an unsupported platform) the step warns and continues; you can run the
+   daemon manually with `token-tally daemon`.
+
+3. **Web Explorer** (conditional) — builds `@token-tally/web-explorer`: the
    TypeScript API server and the React analytics client. This step runs only
    when at least one selected component needs it (currently: macOS tray app or
    Pi usage command). Store-only installs skip this step. After installation,
    `token-tally explore` starts or reuses a local browser-based dashboard
    (see [Web Explorer](#web-explorer)).
 
-3. **Tray app** — builds `clients/macos-tray` in release mode, assembles
+4. **Tray app** — builds `clients/macos-tray` in release mode, assembles
    `ToTally.app`, stops any running instance, installs it atomically to
    `/Applications/ToTally.app`, and launches it. The app registers itself as a
    login item on first launch (see [Launch at login](#launch-at-login)).
 
-4. **Pi integrations** (optional) — if Pi is detected, the picker lets you
+5. **Pi integrations** (optional) — if Pi is detected, the picker lets you
    install either or both Pi extensions under `~/.pi/agent/extensions/`:
    - `token-tally-writer` → `<repo>/harnesses/pi/writer-extension`
    - `token-tally-usage` → `<repo>/clients/pi-usage-command`
 
    Pi is not required. The tray app and CLI work independently of any harness.
 
-5. **Claude Code integration** (optional) — if Claude Code is detected, builds the
+6. **Claude Code integration** (optional) — if Claude Code is detected, builds the
    Claude Code writer, symlinks `~/.local/bin/token-tally-claude-hook` to the
    compiled hook binary, and merges ToTally-owned hook commands into
    `~/.claude/settings.json`. The installer backs up an existing settings file
    before modifying it and preserves all non-ToTally hooks and settings.
 
-6. **Cursor integration** (optional) — if Cursor is detected, builds the
+7. **Cursor integration** (optional) — if Cursor is detected, builds the
    Cursor writer, symlinks `~/.local/bin/token-tally-cursor-hook` to the
    compiled hook binary, and merges ToTally-owned hook commands into
    `~/.cursor/hooks.json`. Cursor uses lower-camel event names and flat hook
@@ -80,15 +93,17 @@ The installer then runs each selected component in order:
    Claude Code settings format. The installer backs up an existing
    `hooks.json` before modifying it and preserves all non-ToTally hooks.
 
-7. **Manifest** — writes `~/.config/token-tally/install.json` with the
+8. **Manifest** — writes `~/.config/token-tally/install.json` with the
    repo path, component status, database path, and schema version.
 
 A failure in step 1 (store) aborts the run — it is the foundation and is always
-installed. A failure in step 2 (web explorer), when required, also aborts the
-run because the tray and Pi components depend on the launcher being present.
-Failures in steps 3–6 are reported and printed, but the other selected
-components still complete. Skipped optional components are recorded as not
-installed in the install summary and manifest.
+installed. A failure in step 2 (daemon) is non-fatal — the plist or unit file is
+still written, and you can start the daemon manually with `token-tally daemon`.
+A failure in step 3 (web explorer), when required, also aborts the run because
+the tray and Pi components depend on the launcher being present. Failures in
+steps 4–7 are reported and printed, but the other selected components still
+complete. Skipped optional components are recorded as not installed in the
+install summary and manifest.
 
 ### Gatekeeper and unsigned app
 
@@ -107,12 +122,15 @@ You only need to do this once.
 ### Directories created
 
 ```text
-~/.local/share/token-tally/           # analytics database and spool files
-~/.local/share/token-tally/spool/     # NDJSON write-ahead spool
-~/.config/token-tally/                # config and install manifest
-~/.local/state/token-tally/logs/      # log files
+~/.local/share/token-tally/            # analytics database and spool files
+~/.local/share/token-tally/spool/      # NDJSON write-ahead spool (active + closed)
+~/.local/share/token-tally/spool.failed/ # spool files that failed ingest (quarantined)
+~/.config/token-tally/                 # config and install manifest
+~/.local/state/token-tally/logs/       # log files (daemon.log, etc.)
+~/.local/state/token-tally/daemon.json # drain daemon observability state
 ~/.local/state/token-tally/claude-code/ # Claude Code hook offsets/counters
-~/.local/state/token-tally/cursor/    # Cursor hook session state files
+~/.local/state/token-tally/cursor/     # Cursor hook session state files
+~/Library/LaunchAgents/com.token-tally.daemon.plist  # macOS launchd agent
 ```
 
 Where `$XDG_DATA_HOME`, `$XDG_CONFIG_HOME`, or `$XDG_STATE_HOME` are set, those
@@ -441,9 +459,12 @@ swift test  --package-path clients/macos-tray
 |---|---|
 | `~/.local/share/token-tally/events.db` | Central analytics database |
 | `~/.local/share/token-tally/spool/` | NDJSON write-ahead spool |
+| `~/.local/share/token-tally/spool.failed/` | Quarantined spool files that failed ingest |
 | `~/.config/token-tally/install.json` | Install manifest |
 | `~/.config/token-tally/config.json` | Runtime config (future) |
-| `~/.local/state/token-tally/logs/` | Log files |
+| `~/.local/state/token-tally/logs/daemon.log` | Drain daemon log |
+| `~/.local/state/token-tally/daemon.json` | Drain daemon observability state |
+| `~/Library/LaunchAgents/com.token-tally.daemon.plist` | macOS launchd agent for the drain daemon |
 | `/Applications/ToTally.app` | macOS tray app |
 | `~/.pi/agent/extensions/token-tally-writer` | Pi writer extension symlink |
 | `~/.pi/agent/extensions/token-tally-usage` | Pi usage client symlink |
