@@ -46,6 +46,7 @@ type ComponentResult = {
 
 type InstallState = {
   storeOk: boolean;
+  daemonOk: boolean;
   storeDbPath: string;
   storeSchemaVersion: number;
   trayVersion: string;
@@ -401,6 +402,7 @@ function readStoreSchemaVersion(): number {
 function initialInstallState(): InstallState {
   return {
     storeOk: false,
+    daemonOk: false,
     storeDbPath: join(dataDir, "events.db"),
     storeSchemaVersion: 0,
     trayVersion: "unknown",
@@ -524,6 +526,21 @@ function runStoreInstall(state: InstallState): void {
   state.storeSchemaVersion = readStoreSchemaVersion();
 }
 
+function runDaemonInstall(state: InstallState): void {
+  section("Drain daemon");
+  const seaDir = join(dataDir, "bin");
+  const binPath = join(seaDir, "token-tally");
+  const logDir = join(stateDir, "logs");
+
+  const ok = run(join(scriptDir, "install-daemon.sh"), [binPath, logDir]);
+  state.daemonOk = ok;
+  if (!ok) {
+    // Non-fatal: the daemon plist/unit may still have been written even when
+    // launchctl/systemctl returned non-zero. The user can start it manually.
+    warn("Daemon registration had warnings — run 'token-tally daemon' to start manually");
+  }
+}
+
 function runTrayInstall(components: Component[], state: InstallState): void {
   runOptionalComponent(
     components,
@@ -616,6 +633,17 @@ function writeManifest(state: InstallState): void {
         schemaVersion: state.storeSchemaVersion,
         nodePath: process.execPath,
       },
+      daemon: {
+        registered: state.daemonOk,
+        platform: process.platform,
+        plistPath: process.platform === "darwin"
+          ? join(home, "Library/LaunchAgents/com.token-tally.daemon.plist")
+          : undefined,
+        unitPath: process.platform === "linux"
+          ? join(home, ".config/systemd/user/token-tally-daemon.service")
+          : undefined,
+        logPath: join(stateDir, "logs/daemon.log"),
+      },
       tray: {
         installed: state.components.tray.ok,
         path: "/Applications/ToTally.app",
@@ -683,7 +711,9 @@ function resultLabel(result: ComponentResult): string {
 function printSummary(state: InstallState): void {
   section("Summary");
   const storeLabel = state.storeOk ? `${color.green}ok${color.reset}` : `${color.red}failed${color.reset}`;
+  const daemonLabel = state.daemonOk ? `${color.green}ok${color.reset}` : `${color.yellow}check${color.reset}`;
   console.log(`  store     ${storeLabel}`);
+  console.log(`  daemon    ${daemonLabel}`);
   console.log(`  web-exp   ${resultLabel(state.components.webExplorer)}`);
   console.log(`  tray      ${resultLabel(state.components.tray)}`);
   console.log(`  pi-write  ${resultLabel(state.components.piWriter)}`);
@@ -721,6 +751,7 @@ async function main(): Promise<void> {
   const state = initialInstallState();
   runPricingGeneration();
   runStoreInstall(state);
+  runDaemonInstall(state);
 
   // Web Explorer is built only when at least one selected component needs the
   // shared `token-tally explore` launcher (currently: tray, Pi usage command).

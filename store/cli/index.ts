@@ -13,13 +13,16 @@
  * returned value.
  */
 
-import { mkdirSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { pathToFileURL } from "url";
 import { cmdImportLegacyPi } from "./import-legacy-pi";
 import { formatDoctorReport, runDoctor } from "../src/doctor";
 import { ingestDir, ingestFile } from "../src/ingest";
-import { defaultDatabasePath, defaultSpoolDir } from "../src/paths";
+import type { IngestOptions } from "../src/ingest";
+import { defaultDatabasePath, defaultSpoolDir, defaultStateDir } from "../src/paths";
+import { promoteStaleActiveFiles } from "../src/spool";
+import type { PromoteResult } from "../src/spool";
 import type {
   HarnessPayload,
   LlmMessagePayload,
@@ -50,6 +53,66 @@ export type ExploreOptions = {
   /** Idle timeout in milliseconds. null = disabled via --no-idle-timeout. */
   idleTimeoutMs: number | null;
   foreground?: boolean;
+};
+
+// ---------------------------------------------------------------------------
+// Daemon state (written to ~/.local/state/token-tally/daemon.json)
+// ---------------------------------------------------------------------------
+
+/**
+ * Observability snapshot persisted by the running daemon.
+ * Read by `token-tally daemon --status` and available for external tooling.
+ */
+type DaemonState = {
+  /** Schema version for forward compatibility. */
+  version: 1;
+  daemon: {
+    /** ISO timestamp when this daemon process started. */
+    startedAt: string;
+    /** OS process ID. */
+    pid: number;
+    /** Milliseconds since daemon started. */
+    uptimeMs: number;
+    /** Total drain passes completed since start. */
+    passCount: number;
+    /** ISO timestamp of the most recent pass, or null before the first pass. */
+    lastPassAt: string | null;
+    /** Wall-clock duration of the most recent pass in milliseconds, or null. */
+    lastPassDurationMs: number | null;
+  };
+  spool: {
+    /** Closed spool file count as of the most recent state write. */
+    depth: number;
+    /** Closed file count before the most recent pass began. */
+    depthBeforeLastPass: number;
+    /** Closed file count after the most recent pass finished. */
+    depthAfterLastPass: number;
+    /** Active files promoted to .closed in the most recent pass. */
+    promotedLastPass: number;
+  };
+  drain: {
+    /** Total spool files successfully drained and deleted since daemon start. */
+    totalDrained: number;
+    /** Total drain errors (ingest failures) since daemon start. */
+    totalErrors: number;
+    /** Total files skipped by drain bounds (maxFiles/maxMs) since daemon start. */
+    totalSkippedByBound: number;
+    /** Total active files promoted to .closed since daemon start. */
+    totalPromoted: number;
+  };
+  errors: {
+    /** Most recent error message, or null. */
+    lastError: string | null;
+    /** ISO timestamp of the most recent error, or null. */
+    lastErrorAt: string | null;
+    /**
+     * DB connection status as of the most recent pass.
+     * 'ok' = drain succeeded with no errors.
+     * 'error' = drain reported at least one ingest error.
+     * 'unknown' = no pass has run yet.
+     */
+    dbStatus: 'ok' | 'error' | 'unknown';
+  };
 };
 
 // ---------------------------------------------------------------------------
@@ -146,13 +209,31 @@ export async function main(argv: string[]): Promise<number> {
       "ingest [path]",
       "Drain closed NDJSON spool files into the central database.",
       (y) =>
-        y.positional("path", {
-          type: "string",
-          describe:
-            "File or directory to ingest. Omit to drain the default spool directory.",
-        }),
+        y
+          .positional("path", {
+            type: "string",
+            describe:
+              "File or directory to ingest. Omit to drain the default spool directory.",
+          })
+          .option("max-files", {
+            type: "number",
+            describe:
+              "Maximum number of spool files to drain in one pass. " +
+              "Remaining files are left for the next run or the daemon.",
+          })
+          .option("max-time", {
+            type: "string",
+            describe:
+              "Maximum wall-clock time budget for the drain pass " +
+              "(e.g. 30s, 5m, 1h). Remaining files are left for the next run or the daemon.",
+          }),
       async (args) => {
-        exitCode = await cmdIngest(args.path, args.db);
+        exitCode = await cmdIngest(
+          args.path,
+          args.db,
+          args["max-files"],
+          args["max-time"],
+        );
       },
     )
 
@@ -209,6 +290,67 @@ export async function main(argv: string[]): Promise<number> {
           );
           exitCode = 1;
         }
+      },
+    )
+
+    // ── daemon ───────────────────────────────────────────────────────────
+    .command(
+      "daemon",
+      [
+        "Run the drain daemon (promotes stale spool files and persists events to the database).",
+        "",
+        "The daemon runs in the foreground in a loop, calling ingest at the configured",
+        "interval. Use Ctrl-C or SIGTERM to stop it. Daemon state is written to",
+        "~/.local/state/token-tally/daemon.json for observability.",
+        "",
+        "The installer registers the daemon with launchd (macOS) or systemd (Linux)",
+        "so it starts at login and restarts on crash.",
+        "",
+        "For one-shot manual draining: token-tally ingest [--max-files N] [--max-time 5m]",
+      ].join("\n"),
+      (y) =>
+        y
+          .option("interval", {
+            type: "string",
+            default: "30s",
+            describe:
+              "How often to run a drain pass (e.g. 30s, 1m, 5m). " +
+              "The daemon sleeps this long between passes.",
+          })
+          .option("max-files", {
+            type: "number",
+            describe:
+              "Maximum number of closed spool files to drain per pass. " +
+              "Remaining files are left for subsequent passes.",
+          })
+          .option("max-time", {
+            type: "string",
+            describe:
+              "Maximum wall-clock time budget per drain pass (e.g. 30s, 5m). " +
+              "The check happens before each file; an in-progress file always completes.",
+          })
+          .option("min-age", {
+            type: "string",
+            default: "5m",
+            describe:
+              "Minimum file mtime age before a dead-PID active spool file may be " +
+              "promoted to .closed (e.g. 5m, 1h). Guards against PID reuse.",
+          })
+          .option("status", {
+            type: "boolean",
+            describe:
+              "Print current daemon state from the state file and exit " +
+              "(does not start or interact with a running daemon).",
+          }),
+      async (args) => {
+        exitCode = await cmdDaemon({
+          dbPath: args.db,
+          intervalRaw: args.interval as string,
+          maxFiles: args["max-files"] as number | undefined,
+          maxTimeRaw: args["max-time"] as string | undefined,
+          minAgeRaw: args["min-age"] as string,
+          showStatus: args.status === true,
+        });
       },
     )
 
@@ -432,6 +574,9 @@ async function cmdRecord(
   jsonPayload: string,
   dbPathOverride: string | undefined,
 ): Promise<number> {
+  // NOTE: AnalyticsWriter.open() is called without drain options here, so no
+  // full-directory spool scan is performed on `record`. The drain daemon (T6)
+  // is responsible for draining accumulated spool files out-of-process.
   if (!(VALID_RECORD_TYPES as ReadonlyArray<string>).includes(recordType)) {
     process.stderr.write(
       `token-tally record: unknown type '${recordType}'.\n` +
@@ -454,6 +599,7 @@ async function cmdRecord(
 
   let writer: AnalyticsWriter;
   try {
+    // No drain options — hot-path one-shot writes must not scan the spool dir.
     writer = await AnalyticsWriter.open({
       dbPath,
       harnessName: "token-tally-cli",
@@ -527,12 +673,46 @@ async function dispatchRecord(
 async function cmdIngest(
   targetPath: string | undefined,
   dbPathOverride: string | undefined,
+  maxFiles: number | undefined,
+  maxTimeRaw: string | undefined,
 ): Promise<number> {
   const dbPath = dbPathOverride ?? defaultDatabasePath();
-  const options = { dbPath };
+
+  // Parse the wall-clock budget, if provided.
+  let maxMs: number | undefined;
+  if (maxTimeRaw != null) {
+    try {
+      maxMs = parseDurationMs(maxTimeRaw);
+    } catch (err) {
+      process.stderr.write(
+        `token-tally ingest: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      return 1;
+    }
+  }
+
+  const options: IngestOptions = {
+    dbPath,
+    harnessName: "token-tally-cli",
+    maxFiles,
+    maxMs,
+  };
 
   if (targetPath != null) {
-    // Ingest a single file (active or closed).
+    // Route to directory or single-file ingest depending on what targetPath is.
+    let isDirectory = false;
+    try {
+      isDirectory = statSync(targetPath).isDirectory();
+    } catch {
+      // Non-existent path — let ingestFile produce the "File not found" error.
+    }
+
+    if (isDirectory) {
+      return cmdIngestDir(targetPath, options);
+    }
+
+    // Single-file ingest: drains exactly the specified file. Does NOT scan
+    // the default spool directory as a side effect.
     const result = await ingestFile(targetPath, options);
     if (result.errors.length > 0) {
       for (const e of result.errors) {
@@ -546,13 +726,28 @@ async function cmdIngest(
     return 0;
   }
 
-  // Drain the default spool directory.
-  const spoolDir = defaultSpoolDir();
-  const result = await ingestDir(spoolDir, options);
+  // No path given — drain the default spool directory.
+  return cmdIngestDir(defaultSpoolDir(), options);
+}
+
+/**
+ * Drains a directory of closed spool files and prints a human-readable
+ * summary. Shared between the no-path and directory-path ingest flows.
+ */
+async function cmdIngestDir(
+  dir: string,
+  options: IngestOptions,
+): Promise<number> {
+  const result = await ingestDir(dir, options);
 
   if (result.skipped > 0) {
     process.stdout.write(
       `token-tally ingest: skipped ${result.skipped} active spool file(s) (still open by a live writer).\n`,
+    );
+  }
+  if (result.skippedByBound > 0) {
+    process.stdout.write(
+      `token-tally ingest: hit limit — ${result.skippedByBound} file(s) not yet attempted; re-run or wait for the daemon.\n`,
     );
   }
   if (result.errors.length > 0) {
@@ -563,7 +758,7 @@ async function cmdIngest(
   }
 
   process.stdout.write(
-    `token-tally ingest: ingested ${result.ingested} file(s) from ${spoolDir}\n`,
+    `token-tally ingest: ingested ${result.ingested} file(s) from ${dir}\n`,
   );
 
   return result.errors.length > 0 ? 1 : 0;
@@ -587,4 +782,285 @@ async function cmdDoctor(
   }
 
   return report.status === "ok" ? 0 : 1;
+}
+
+// ---------------------------------------------------------------------------
+// daemon
+// ---------------------------------------------------------------------------
+
+/**
+ * Sleeps for `ms` milliseconds, but checks the `isStopped` callback every
+ * 200 ms so the daemon can exit promptly on SIGTERM/SIGINT without waiting
+ * for the full interval to elapse.
+ */
+function sleepInterruptible(
+  ms: number,
+  isStopped: () => boolean,
+): Promise<void> {
+  return new Promise<void>((resolve) => {
+    let elapsed = 0;
+    const TICK_MS = 200;
+    const tick = () => {
+      if (isStopped() || elapsed >= ms) {
+        resolve();
+        return;
+      }
+      elapsed += TICK_MS;
+      setTimeout(tick, Math.min(TICK_MS, ms - elapsed + TICK_MS));
+    };
+    setTimeout(tick, Math.min(TICK_MS, ms));
+  });
+}
+
+async function cmdDaemon(args: {
+  dbPath?: string;
+  intervalRaw: string;
+  maxFiles?: number;
+  maxTimeRaw?: string;
+  minAgeRaw: string;
+  showStatus: boolean;
+}): Promise<number> {
+  const stateDir = defaultStateDir();
+  const stateFile = join(stateDir, "daemon.json");
+
+  // ── --status mode: read and print state file then exit ─────────────────
+  if (args.showStatus) {
+    if (!existsSync(stateFile)) {
+      process.stdout.write(
+        "token-tally daemon: no state file found — daemon does not appear to be running.\n" +
+          `  Expected: ${stateFile}\n`,
+      );
+      return 1;
+    }
+    try {
+      const raw = readFileSync(stateFile, "utf8");
+      process.stdout.write(raw + "\n");
+      return 0;
+    } catch (err) {
+      process.stderr.write(
+        `token-tally daemon: cannot read state file: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      return 1;
+    }
+  }
+
+  // ── Parse CLI options ───────────────────────────────────────────────────
+  let intervalMs: number;
+  try {
+    intervalMs = parseDurationMs(args.intervalRaw);
+    if (intervalMs <= 0) throw new Error("--interval must be > 0");
+  } catch (err) {
+    process.stderr.write(
+      `token-tally daemon: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    return 1;
+  }
+
+  let maxMs: number | undefined;
+  if (args.maxTimeRaw != null) {
+    try {
+      maxMs = parseDurationMs(args.maxTimeRaw);
+    } catch (err) {
+      process.stderr.write(
+        `token-tally daemon: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      return 1;
+    }
+  }
+
+  let minAgeMs: number;
+  try {
+    minAgeMs = parseDurationMs(args.minAgeRaw);
+  } catch (err) {
+    process.stderr.write(
+      `token-tally daemon: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    return 1;
+  }
+
+  const spoolDir = defaultSpoolDir();
+  const dbPath = args.dbPath ?? defaultDatabasePath();
+  const startedAt = new Date();
+  mkdirSync(stateDir, { recursive: true });
+
+  // ── Observability state (written to daemon.json after every pass) ───────
+  let passCount = 0;
+  let totalDrained = 0;
+  let totalErrors = 0;
+  let totalSkippedByBound = 0;
+  let totalPromoted = 0;
+  let lastPassAt: string | null = null;
+  let lastPassDurationMs: number | null = null;
+  let depthBeforeLastPass = 0;
+  let depthAfterLastPass = 0;
+  let promotedLastPass = 0;
+  let lastError: string | null = null;
+  let lastErrorAt: string | null = null;
+  let dbStatus: "ok" | "error" | "unknown" = "unknown";
+
+  const countClosedFiles = (): number => {
+    try {
+      if (!existsSync(spoolDir)) return 0;
+      return readdirSync(spoolDir).filter((f) => f.endsWith(".ndjson.closed")).length;
+    } catch {
+      return 0;
+    }
+  };
+
+  const writeState = (): void => {
+    const state: DaemonState = {
+      version: 1,
+      daemon: {
+        startedAt: startedAt.toISOString(),
+        pid: process.pid,
+        uptimeMs: Date.now() - startedAt.getTime(),
+        passCount,
+        lastPassAt,
+        lastPassDurationMs,
+      },
+      spool: {
+        depth: countClosedFiles(),
+        depthBeforeLastPass,
+        depthAfterLastPass,
+        promotedLastPass,
+      },
+      drain: {
+        totalDrained,
+        totalErrors,
+        totalSkippedByBound,
+        totalPromoted,
+      },
+      errors: {
+        lastError,
+        lastErrorAt,
+        dbStatus,
+      },
+    };
+    try {
+      writeFileSync(stateFile, JSON.stringify(state, null, 2) + "\n", "utf8");
+    } catch {
+      // Non-fatal: observability failure must never kill the drain loop.
+    }
+  };
+
+  // ── Signal handling ─────────────────────────────────────────────────────
+  let stopped = false;
+  const onStop = (): void => {
+    stopped = true;
+  };
+  process.on("SIGTERM", onStop);
+  process.on("SIGINT", onStop);
+
+  // ── Startup banner ──────────────────────────────────────────────────────
+  process.stdout.write(
+    `token-tally daemon: started (pid=${process.pid}, interval=${args.intervalRaw})\n` +
+      `token-tally daemon: spool dir: ${spoolDir}\n` +
+      `token-tally daemon: state file: ${stateFile}\n` +
+      `token-tally daemon: Press Ctrl-C or send SIGTERM to stop.\n`,
+  );
+
+  writeState();
+
+  // ── Main drain loop ─────────────────────────────────────────────────────
+  while (!stopped) {
+    const passStart = Date.now();
+
+    // Step 1: Promote dead-PID stale active files → .closed
+    //
+    // This runs first so the drain step below can pick up any newly-closed
+    // files in the same pass.
+    let promoteResult: PromoteResult = { promoted: [], skipped: [] };
+    try {
+      promoteResult = promoteStaleActiveFiles(spoolDir, { minAgeMs });
+      if (promoteResult.promoted.length > 0) {
+        process.stdout.write(
+          `token-tally daemon: promoted ${promoteResult.promoted.length} stale active file(s) to .closed\n`,
+        );
+      }
+      // Log skipped-with-details only when there was at least one skip reason
+      // worth surfacing (i.e. not just "pid still alive").
+      const interestingSkips = promoteResult.skipped.filter(
+        (s) => !s.reason.startsWith("PID") || s.reason.includes("too recent"),
+      );
+      for (const s of interestingSkips) {
+        process.stdout.write(
+          `token-tally daemon: skipped active file '${s.file}': ${s.reason}\n`,
+        );
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`token-tally daemon: promote step failed: ${msg}\n`);
+      lastError = `promote: ${msg}`;
+      lastErrorAt = new Date().toISOString();
+    }
+    promotedLastPass = promoteResult.promoted.length;
+    totalPromoted += promotedLastPass;
+
+    // Step 2: Drain closed spool files (bounded by maxFiles / maxMs)
+    depthBeforeLastPass = countClosedFiles();
+    try {
+      const drainResult = await ingestDir(spoolDir, {
+        dbPath,
+        maxFiles: args.maxFiles,
+        maxMs,
+      });
+
+      totalDrained += drainResult.ingested;
+      totalErrors += drainResult.errors.length;
+      totalSkippedByBound += drainResult.skippedByBound;
+
+      if (drainResult.errors.length > 0) {
+        dbStatus = "error";
+        for (const e of drainResult.errors) {
+          const msg = `drain error on ${e.file}: ${e.message}`;
+          process.stderr.write(`token-tally daemon: ${msg}\n`);
+          lastError = msg;
+          lastErrorAt = new Date().toISOString();
+        }
+      } else {
+        dbStatus = "ok";
+      }
+
+      if (drainResult.ingested > 0) {
+        process.stdout.write(
+          `token-tally daemon: drained ${drainResult.ingested} file(s)\n`,
+        );
+      }
+      if (drainResult.skippedByBound > 0) {
+        process.stdout.write(
+          `token-tally daemon: ${drainResult.skippedByBound} file(s) hit bound — will retry\n`,
+        );
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`token-tally daemon: drain pass failed: ${msg}\n`);
+      lastError = `drain: ${msg}`;
+      lastErrorAt = new Date().toISOString();
+      dbStatus = "error";
+    }
+    depthAfterLastPass = countClosedFiles();
+
+    passCount++;
+    lastPassAt = new Date().toISOString();
+    lastPassDurationMs = Date.now() - passStart;
+    writeState();
+
+    // Sleep until the next pass, waking early on SIGTERM/SIGINT.
+    await sleepInterruptible(intervalMs, () => stopped);
+  }
+
+  // ── Clean shutdown ──────────────────────────────────────────────────────
+  process.stdout.write(
+    `token-tally daemon: stopped after ${passCount} pass(es), ` +
+      `${totalDrained} file(s) drained, ${totalErrors} error(s)\n`,
+  );
+
+  // Remove the state file so --status reports "not running" after clean exit.
+  try {
+    if (existsSync(stateFile)) unlinkSync(stateFile);
+  } catch {
+    // Non-fatal.
+  }
+
+  return 0;
 }
