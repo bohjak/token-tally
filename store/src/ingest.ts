@@ -24,7 +24,7 @@
 import { existsSync, readFileSync, readdirSync, renameSync, unlinkSync } from "fs";
 import { dirname, join } from "path";
 import { defaultFailedDir, quarantineSpoolFile } from "./spool";
-import type { BoundedDrainOptions, QuarantineMetadata, SpoolRecord } from "./spool";
+import type { BoundedDrainOptions, SpoolRecord } from "./spool";
 import { AnalyticsWriter } from "./writer";
 import type { WriterOptions } from "./types";
 
@@ -204,6 +204,13 @@ export async function ingestFile(
  *
  * This function is explicit — it does NOT drain the default spool directory
  * unless `dir` is omitted, and it never scans unrelated directories.
+ *
+ * ## T10 legacy repair
+ *
+ * Each file is processed via `applyRecordsToWriter`, which includes the legacy
+ * synthetic spool ID repair logic. This is the same path used by `ingestFile`
+ * and ensures cross-file synthetic `spool:*` IDs are resolved (or quarantined
+ * with a clear error) rather than failing with a silent FK constraint.
  */
 export async function ingestDir(
   dir?: string,
@@ -220,105 +227,93 @@ export async function ingestDir(
   const activeFiles = allFiles.filter(
     (f) => f.endsWith(".ndjson") && !f.endsWith(".ndjson.closed")
   );
-  const closedBefore = allFiles.filter((f) => f.endsWith(".ndjson.closed"));
+  const closedFiles = allFiles.filter((f) => f.endsWith(".ndjson.closed"));
 
-  if (closedBefore.length === 0) {
+  if (closedFiles.length === 0) {
     return { ingested: 0, skipped: activeFiles.length, skippedByBound: 0, quarantined: 0, errors: [] };
   }
 
-  // Resolve the quarantine dir so we can snapshot it before/after the drain.
-  // Mirror the same defaulting logic used by drainClosedSpoolFiles so our
-  // accounting is consistent with what actually happened inside the writer.
   const resolvedFailedDir: string | null =
     options?.failedDir !== undefined
       ? options.failedDir
       : defaultFailedDir(targetDir);
 
-  // Snapshot the failed dir so we can count newly quarantined files after
-  // the drain completes. The drain happens inside AnalyticsWriter.open(),
-  // which calls drainClosedSpoolFiles() internally.
-  const failedBefore = new Set<string>(
-    resolvedFailedDir != null && existsSync(resolvedFailedDir)
-      ? readdirSync(resolvedFailedDir).filter((f) => f.endsWith(".ndjson.closed"))
-      : []
-  );
+  // Evaluate bounds. Infinity makes bound checks uniform without conditionals.
+  const maxFiles = options?.maxFiles ?? Infinity;
+  const deadline = options?.maxMs != null ? Date.now() + options.maxMs : Infinity;
 
-  // Open the writer with explicit drain-on-open so existing closed spool files
-  // are replayed into the database. Pass bounds so the drain pass is bounded.
-  // The writer never writes any new records here, so its own active spool file
-  // is empty and rotate() is a no-op on close.
+  // Open the writer ONCE for the whole batch — one DB open/close per ingestDir
+  // call regardless of file count. No drain-on-open: we process files manually
+  // using applyRecordsToWriter so T10 legacy repair applies to every file.
   const writer = await AnalyticsWriter.open({
     dbPath: options?.dbPath,
     harnessName: options?.harnessName ?? "token-tally-ingest",
     spoolDir: targetDir,
-    drain: {
-      onOpen: true,
-      maxFiles: options?.maxFiles,
-      maxMs: options?.maxMs,
-      // Pass the resolved failedDir so the writer's internal drain quarantines
-      // failed files to the same location we will snapshot below. null = disable.
-      failedDir: resolvedFailedDir,
-    },
+    // Explicit no-drain: this writer is opened solely for its DB connection.
+    // We handle drain manually below.
   });
-  await writer.close();
 
-  // ---- Count results by comparing spool and failed dirs before/after --------
-
-  const closedAfter = existsSync(targetDir)
-    ? readdirSync(targetDir).filter((f) => f.endsWith(".ndjson.closed"))
-    : [];
-
-  // Detect newly quarantined files: any .ndjson.closed in the failed dir that
-  // was not there before the drain.
-  const newlyQuarantinedNames =
-    resolvedFailedDir != null && existsSync(resolvedFailedDir)
-      ? readdirSync(resolvedFailedDir)
-          .filter((f) => f.endsWith(".ndjson.closed") && !failedBefore.has(f))
-      : [];
-
-  const quarantined = newlyQuarantinedNames.length;
-  const ingested = Math.max(0, closedBefore.length - closedAfter.length - quarantined);
-
-  // Build per-file error messages for quarantined files by reading their
-  // .failed.json metadata. This surfaces the actual underlying error (e.g.
-  // FK violation, JSON parse error) that was previously hidden behind the
-  // generic "File could not be drained" message.
+  let ingested = 0;
+  let quarantined = 0;
+  let skippedByBound = 0;
   const errors: Array<{ file: string; message: string }> = [];
+  let processed = 0;
 
-  if (resolvedFailedDir != null) {
-    for (const filename of newlyQuarantinedNames) {
-      const quarantinedPath = join(resolvedFailedDir, filename);
-      const metaPath = quarantinedPath + '.failed.json';
-      let message = `quarantined (see ${metaPath} for details)`;
-      try {
-        const meta = JSON.parse(readFileSync(metaPath, 'utf8')) as QuarantineMetadata;
-        message = `${meta.error} (quarantined to ${quarantinedPath})`;
-      } catch { /* metadata read failed — use the generic message above */ }
-      // Report using the original spool path, not the quarantine path.
-      errors.push({ file: join(targetDir, filename), message });
+  for (const filename of closedFiles) {
+    // Check both bounds before attempting the next file.
+    if (processed >= maxFiles || Date.now() > deadline) {
+      skippedByBound++;
+      continue;
+    }
+    processed++;
+
+    const filePath = join(targetDir, filename);
+    let drainError: string | null = null;
+    let firstRecord: unknown = null;
+
+    try {
+      const lines = readFileSync(filePath, "utf8")
+        .split("\n")
+        .filter((line) => line.trim() !== "");
+      const records = lines.map((line) => JSON.parse(line) as SpoolRecord);
+      // Capture first record for quarantine metadata even if drain fails.
+      firstRecord = records[0] ?? null;
+      await applyRecordsToWriter(writer, records);
+      unlinkSync(filePath);
+      ingested++;
+    } catch (err) {
+      drainError = err instanceof Error ? err.message : String(err);
+    }
+
+    if (drainError != null) {
+      if (resolvedFailedDir != null) {
+        const quarantinePath = quarantineSpoolFile(
+          filePath,
+          resolvedFailedDir,
+          drainError,
+          firstRecord,
+        );
+        if (quarantinePath != null) {
+          quarantined++;
+          errors.push({
+            file: filePath,
+            message: `${drainError} (quarantined to ${quarantinePath})`,
+          });
+        } else {
+          // Quarantine itself failed — file left in spool dir.
+          errors.push({
+            file: filePath,
+            message: `${drainError} (quarantine failed — file left in spool directory)`,
+          });
+        }
+      } else {
+        // Quarantine disabled (failedDir: null) — leave file in place.
+        errors.push({ file: filePath, message: drainError });
+      }
     }
   }
 
-  // Files remaining in the spool dir after drain: either bound-skipped or
-  // genuinely failed but not quarantined (quarantine also failed or was disabled).
-  const boundsWereActive = options?.maxFiles != null || options?.maxMs != null;
-  let skippedByBound: number;
-
-  if (boundsWereActive) {
-    // Treat all remaining files as not yet attempted to avoid false errors.
-    // The daemon will retry them on the next pass.
-    skippedByBound = closedAfter.length;
-  } else {
-    // No bounds were active, so remaining files either failed quarantine or
-    // had quarantine disabled. Report them as errors.
-    skippedByBound = 0;
-    for (const f of closedAfter) {
-      errors.push({
-        file: join(targetDir, f),
-        message: "File could not be drained and could not be quarantined — file left in spool directory.",
-      });
-    }
-  }
+  await writer.close();
 
   return { ingested, skipped: activeFiles.length, skippedByBound, quarantined, errors };
 }
