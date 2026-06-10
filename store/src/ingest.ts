@@ -553,7 +553,16 @@ async function applyRecordsToWriter(
             turnIds.set(resolvedTurnId, turnId);
             resolvedTurnId = turnId;
           }
-          // If unparseable: let FK constraint fire and quarantine the file.
+          // If still synthetic after repair attempt: throw so the file is
+          // quarantined rather than silently re-spooling the record.
+          if (resolvedTurnId.startsWith('spool:')) {
+            throw new Error(
+              `Cannot resolve synthetic turn ID '${resolvedTurnId}': ` +
+              `the natural key could not be parsed (format is unrecognised or the ` +
+              `path/harnessSessionId repeat invariant was not satisfied). ` +
+              `Record quarantined for manual inspection.`
+            );
+          }
         }
 
         // Re-resolve sessionId: it may have been synthesised during turn repair
@@ -629,6 +638,14 @@ async function applyRecordsToWriter(
             });
             turnIds.set(resolvedTurnId, turnId);
             resolvedTurnId = turnId;
+          }
+          // Same as llm-message: throw if still synthetic after repair attempt.
+          if (resolvedTurnId.startsWith('spool:')) {
+            throw new Error(
+              `Cannot resolve synthetic turn ID '${resolvedTurnId}': ` +
+              `the natural key could not be parsed. ` +
+              `Record quarantined for manual inspection.`
+            );
           }
         }
 

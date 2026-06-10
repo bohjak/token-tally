@@ -790,8 +790,10 @@ describe("legacy emergency spool repair (T10)", () => {
 
   test("llm-message with spool:<uuid>: turn synthesises parent turn and ingests successfully", async () => {
     const dbPath = path.join(tmp.dir, "legacy-llm-uuid.db");
+    // Explicit spoolDir keeps this writer's fallback files in tmp, not the default spool dir.
+    const spoolDirTmp = path.join(tmp.dir, "spool-llm-uuid");
     // First create the session in the DB so we have a real UUID.
-    const writer = await AnalyticsWriter.open({ dbPath, harnessName: "pi" });
+    const writer = await AnalyticsWriter.open({ dbPath, harnessName: "pi", spoolDir: spoolDirTmp });
     await writer.recordHarness({ name: "pi", displayName: "Pi" });
     const { id: sessionUuid } = await writer.recordSession({
       harnessId: "pi",
@@ -822,7 +824,8 @@ describe("legacy emergency spool repair (T10)", () => {
       "utf8",
     );
 
-    const result = await ingestFile(spoolFile, { dbPath });
+    // Explicit spoolDir prevents fallback spool files from leaking to the default spool dir.
+    const result = await ingestFile(spoolFile, { dbPath, spoolDir: spoolDirTmp });
 
     assert.equal(result.ingested, 1, "file should be ingested");
     assert.equal(result.errors.length, 0, `unexpected errors: ${JSON.stringify(result.errors)}`);
@@ -873,7 +876,8 @@ describe("legacy emergency spool repair (T10)", () => {
       "utf8",
     );
 
-    const result = await ingestFile(spoolFile, { dbPath });
+    // Explicit spoolDir prevents fallback spool files from leaking to the default spool dir.
+    const result = await ingestFile(spoolFile, { dbPath, spoolDir: path.join(tmp.dir, "spool-nested") });
 
     assert.equal(result.ingested, 1, "file should be ingested");
     assert.equal(result.errors.length, 0, `unexpected errors: ${JSON.stringify(result.errors)}`);
@@ -927,7 +931,8 @@ describe("legacy emergency spool repair (T10)", () => {
       "utf8",
     );
 
-    const result = await ingestFile(spoolFile, { dbPath });
+    // Explicit spoolDir prevents fallback spool files from leaking to the default spool dir.
+    const result = await ingestFile(spoolFile, { dbPath, spoolDir: path.join(tmp.dir, "spool-tool-nested") });
 
     assert.equal(result.ingested, 1, "file should be ingested");
     assert.equal(result.errors.length, 0, `unexpected errors: ${JSON.stringify(result.errors)}`);
