@@ -257,7 +257,7 @@ export function createCliAnalyticsWriter(): AnalyticsWriterLike {
   // mismatch risk and no version-probe overhead at startup.
   const seaBinary = findSeaBinary();
   if (seaBinary != null) {
-    return new CliAnalyticsWriter(seaBinary, [], seaBinary);
+    return new CliAnalyticsWriter(seaBinary, [], dirname(seaBinary));
   }
 
   // Fallback: run the compiled JS bin via a compatible Node interpreter.
