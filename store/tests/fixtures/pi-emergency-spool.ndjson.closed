@@ -1,0 +1,1 @@
+{"type":"turn","payload":{"harnessId":"pi","sessionId":"spool:pi:/sentinel/sessions/sess-001.jsonl","harnessTurnId":"/sentinel/sessions/sess-001.jsonl:t0","turnIndex":0,"startedAt":1700000000000}}
