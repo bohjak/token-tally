@@ -1,28 +1,54 @@
 /**
- * cli-writer.ts — Pi-safe writer bridge for ToTally.
+ * cli-writer.ts — Pi spool writer for ToTally.
  *
- * The Pi extension must not import @token-tally/store at runtime: that package
- * loads better-sqlite3, whose native addon is compiled for the Node version
- * used during install. Pi itself is launched with `#!/usr/bin/env node`, so its
- * Node version can differ from the install/runtime used by ToTally.
+ * Appends analytics records to a single local NDJSON spool file per Pi
+ * process instead of spawning a `token-tally record` subprocess per event.
  *
- * This bridge keeps the extension ABI-agnostic by spawning the installed
- * `token-tally` CLI with the Node executable recorded at install time. The
- * extension process only handles JSON and child processes; SQLite/native code
- * lives in the helper process.
+ * ## Why spool instead of subprocess
+ *
+ * The old approach spawned the 137 MB SEA binary on every hot-path event
+ * (turn_start, turn_end, message_end, tool_execution_end). Each spawn took
+ * 5-14 s when a large spool backlog was present because the store writer
+ * attempted to drain the full spool directory on open/close. That blocked
+ * Pi turns visibly and caused high CPU from repeated SQLite drain attempts.
+ *
+ * ## This writer
+ *
+ * - Appends lifecycle-ordered NDJSON records to one file per Pi process.
+ *   Ordering: harness/session records first, then turns, then child records
+ *   (LLM messages, tool calls). Pi fires events in this order naturally, so
+ *   the file ordering is preserved by the serial write queue.
+ * - Returns synthetic spool IDs immediately (no DB round-trip in hot path).
+ * - Uses an async serial write queue: callers fire-and-forget; writes never
+ *   block Pi turns or message handlers.
+ * - Rotates the active file to `.ndjson.closed` on session_shutdown so the
+ *   drain daemon can pick it up.
+ * - Does NOT import better-sqlite3 or any store DB code — only type imports.
+ *
+ * ## Synthetic ID scheme  (store-compatible)
+ *
+ * The drain daemon resolves these IDs using the ordered records in the same
+ * file. Parent records always appear before children, so the daemon can build
+ * an in-file map from synthetic ID → real UUID as it processes each record.
+ *
+ *   session:      spool:${harnessId}:${harnessSessionId}
+ *   turn:         spool:${sessionId}:${harnessTurnId}
+ *   llm-message:  spool:${harnessId}:${harnessMessageId}
+ *   tool-call:    spool:${harnessId}:${harnessToolCallId}
+ *
+ * ## File naming
+ *
+ *   Active:   pi-<pid>-<open-ts>.ndjson
+ *   Closed:   pi-<pid>-<open-ts>-<close-ts>.ndjson.closed
+ *
+ * The PID in the name lets the drain daemon detect dead owner processes and
+ * safely promote stale active files to `.closed` (see T6).
  */
 
-import { spawn, spawnSync } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
+import { appendFile, rename, stat, unlink } from "node:fs/promises";
+import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { basename, join } from "node:path";
 import type {
   HarnessPayload,
   LlmMessagePayload,
@@ -51,127 +77,18 @@ export type AnalyticsWriterLike = {
   close(): Promise<void>;
 };
 
-type RecordType =
-  | "harness"
-  | "session"
-  | "turn"
-  | "llm-message"
-  | "subscription"
-  | "tool-call"
-  | "raw-event";
-
-type InstallManifest = {
-  repoPath?: unknown;
-  nodePath?: unknown;
-  components?: {
-    store?: {
-      nodePath?: unknown;
-    };
-  };
-};
-
 // ---------------------------------------------------------------------------
-// Runtime discovery
+// Path helpers
 // ---------------------------------------------------------------------------
 
-// Must exceed the maximum SQLite busy-wait budget:
-//   busy_timeout (5 000 ms, SQLite-internal) + withBusyRetry (10 000 ms) = 15 s.
-// Add a generous process-startup buffer on top.
-const DEFAULT_TIMEOUT_MS = 25_000;
 const APP_DIR_NAME = "token-tally";
-
-let emergencySpoolCounter = 0;
-
-function extensionRepoRoot(): string {
-  const here = dirname(fileURLToPath(import.meta.url));
-  return resolve(here, "../../../..");
-}
-
-function readManifest(): InstallManifest | null {
-  const path = join(homedir(), ".config/token-tally/install.json");
-  try {
-    return JSON.parse(readFileSync(path, "utf8")) as InstallManifest;
-  } catch {
-    return null;
-  }
-}
-
-function manifestString(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function nodeMajor(versionOutput: string): number | null {
-  const match = versionOutput.trim().match(/^v?(\d+)\./);
-  if (match == null) return null;
-  return Number.parseInt(match[1], 10);
-}
-
-function probeNodeMajor(nodePath: string): number | null {
-  if (!existsSync(nodePath)) return null;
-
-  const result = spawnSyncText(nodePath, ["--version"], 2_000);
-  if (result.code !== 0) return null;
-  return nodeMajor(result.stdout);
-}
-
-function spawnSyncText(
-  command: string,
-  args: string[],
-  timeoutMs: number,
-): { code: number | null; stdout: string; stderr: string } {
-  const result = spawnSync(command, args, {
-    encoding: "utf8",
-    timeout: timeoutMs,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  return {
-    code: result.status,
-    stdout: result.stdout ?? "",
-    stderr: result.stderr ?? "",
-  };
-}
-
-function findNodePath(manifest: InstallManifest | null): string {
-  const candidates = [
-    manifestString(manifest?.nodePath),
-    manifestString(manifest?.components?.store?.nodePath),
-    process.env.TOKEN_TALLY_NODE ?? null,
-    process.execPath,
-  ].filter((p): p is string => p != null);
-
-  for (const candidate of candidates) {
-    const major = probeNodeMajor(candidate);
-    if (major != null && major >= 24) {
-      return candidate;
-    }
-  }
-
-  // Last resort for users of `n`: this does not depend on PATH's active node
-  // alias, only on the `n` shim being available.
-  const nProbe = spawnSyncText("n", ["which", "24"], 2_000);
-  if (nProbe.code === 0) {
-    const candidate = nProbe.stdout.trim();
-    const major = probeNodeMajor(candidate);
-    if (major != null && major >= 24) {
-      return candidate;
-    }
-  }
-
-  throw new Error(
-    "No Node.js >= 24 runtime found for token-tally. Re-run `make install` " +
-      "with Node 24, or set TOKEN_TALLY_NODE to an absolute Node 24 binary.",
-  );
-}
-
-function findRepoRoot(manifest: InstallManifest | null): string {
-  return manifestString(manifest?.repoPath) ?? extensionRepoRoot();
-}
 
 function defaultDataDir(): string {
   const xdgDataHome = process.env.XDG_DATA_HOME;
-  const base = xdgDataHome != null && xdgDataHome !== ""
-    ? xdgDataHome
-    : join(homedir(), ".local", "share");
+  const base =
+    xdgDataHome != null && xdgDataHome !== ""
+      ? xdgDataHome
+      : join(homedir(), ".local", "share");
   return join(base, APP_DIR_NAME);
 }
 
@@ -179,233 +96,181 @@ function defaultSpoolDir(): string {
   return join(defaultDataDir(), "spool");
 }
 
-/**
- * Returns the path to the SEA binary if it has been installed, otherwise null.
- * The SEA binary is installed by install-store.sh alongside better_sqlite3.node
- * in $XDG_DATA_HOME/token-tally/bin/.
- */
-function findSeaBinary(): string | null {
-  const binPath = join(defaultDataDir(), "bin", "token-tally");
-  return existsSync(binPath) ? binPath : null;
-}
-
-function writeEmergencySpool(record: SpoolRecord): void {
-  const spoolDir = defaultSpoolDir();
-  mkdirSync(spoolDir, { recursive: true });
-
-  const sequence = emergencySpoolCounter++;
-  const baseName = `pi-extension-${process.pid}-${Date.now()}-${sequence}.ndjson`;
-  const tmpPath = join(spoolDir, `${baseName}.tmp`);
-  const closedPath = join(spoolDir, `${baseName}.closed`);
-
-  writeFileSync(tmpPath, JSON.stringify(record) + "\n", "utf8");
-  renameSync(tmpPath, closedPath);
-}
-
-function fallbackId(recordType: Exclude<RecordType, "raw-event">, payload: unknown): string {
-  switch (recordType) {
-    case "harness":
-      return (payload as HarnessPayload).name;
-    case "session": {
-      const session = payload as SessionPayload;
-      return `spool:${session.harnessId}:${session.harnessSessionId}`;
-    }
-    case "turn": {
-      const turn = payload as TurnPayload;
-      return `spool:${turn.sessionId}:${turn.harnessTurnId}`;
-    }
-    case "llm-message": {
-      const message = payload as LlmMessagePayload;
-      return `spool:${message.harnessId}:${message.harnessMessageId}`;
-    }
-    case "subscription": {
-      const subscription = payload as SubscriptionPayload;
-      return `spool:${subscription.harnessId}:${subscription.planName}:${subscription.periodStart}`;
-    }
-    case "tool-call": {
-      const toolCall = payload as ToolCallPayload;
-      return `spool:${toolCall.harnessId}:${toolCall.harnessToolCallId}`;
-    }
-  }
-}
-
-function spoolRecord(recordType: RecordType, payload: unknown): SpoolRecord {
-  switch (recordType) {
-    case "harness":
-      return { type: "harness", payload: payload as HarnessPayload };
-    case "session":
-      return { type: "session", payload: payload as SessionPayload };
-    case "turn":
-      return { type: "turn", payload: payload as TurnPayload };
-    case "llm-message":
-      return { type: "llm-message", payload: payload as LlmMessagePayload };
-    case "subscription":
-      return { type: "subscription", payload: payload as SubscriptionPayload };
-    case "tool-call":
-      return { type: "tool-call", payload: payload as ToolCallPayload };
-    case "raw-event":
-      return { type: "raw-event", payload: payload as RawEventPayload };
-  }
-}
-
 // ---------------------------------------------------------------------------
-// CLI-backed writer implementation
+// SpoolBasedWriter
 // ---------------------------------------------------------------------------
 
-export function createCliAnalyticsWriter(): AnalyticsWriterLike {
-  // Prefer the SEA binary: it embeds its own Node runtime so there is no ABI
-  // mismatch risk and no version-probe overhead at startup.
-  const seaBinary = findSeaBinary();
-  if (seaBinary != null) {
-    return new CliAnalyticsWriter(seaBinary, [], dirname(seaBinary));
-  }
+class SpoolBasedWriter implements AnalyticsWriterLike {
+  private readonly spoolDir: string;
+  private readonly activeFilePath: string;
 
-  // Fallback: run the compiled JS bin via a compatible Node interpreter.
-  const manifest = readManifest();
-  const repoRoot = findRepoRoot(manifest);
-  const nodePath = findNodePath(manifest);
-  const tokenTallyBin = join(repoRoot, "store/bin/token-tally.js");
-
-  if (!existsSync(tokenTallyBin)) {
-    throw new Error(`token-tally CLI not found at ${tokenTallyBin}`);
-  }
-
-  return new CliAnalyticsWriter(nodePath, [tokenTallyBin], repoRoot);
-}
-
-class CliAnalyticsWriter implements AnalyticsWriterLike {
   /**
-   * @param binary      The executable to spawn (SEA binary or Node interpreter).
-   * @param prefixArgs  Arguments prepended before the token-tally subcommand
-   *                    (empty for SEA, [tokenTallyBin] for the JS fallback).
-   * @param cwd         Working directory for the child process.
+   * Serial write queue: each enqueue() chains onto the previous promise so
+   * records are appended in the order they are enqueued with no concurrent
+   * filesystem operations on the same file.
    */
-  constructor(
-    private readonly binary: string,
-    private readonly prefixArgs: string[],
-    private readonly cwd: string,
-  ) {}
+  private writeQueue: Promise<void> = Promise.resolve();
+
+  /**
+   * Set to true immediately when close() is called so that any late enqueue()
+   * calls (e.g. from async git capture resolving after session_shutdown) are
+   * silently dropped rather than writing to an already-closed or rotated file.
+   */
+  private closed = false;
+
+  /**
+   * Error throttle: only log the first disk failure to avoid flooding Pi
+   * logs when the spool directory is persistently unavailable.
+   */
+  private errorLogged = false;
+
+  constructor(spoolDir: string, activeFilePath: string) {
+    this.spoolDir = spoolDir;
+    this.activeFilePath = activeFilePath;
+  }
+
+  // ── record methods — return synthetic IDs immediately ────────────────────
 
   recordHarness(payload: HarnessPayload): Promise<WriteResult> {
-    return this.recordWithId("harness", payload);
+    this.enqueue({ type: "harness", payload });
+    // Harness rows are keyed by name — no synthetic spool prefix needed.
+    return Promise.resolve({ id: payload.name });
   }
 
   recordSession(payload: SessionPayload): Promise<WriteResult> {
-    return this.recordWithId("session", payload);
+    this.enqueue({ type: "session", payload });
+    return Promise.resolve({
+      id: `spool:${payload.harnessId}:${payload.harnessSessionId}`,
+    });
   }
 
   recordTurn(payload: TurnPayload): Promise<WriteResult> {
-    return this.recordWithId("turn", payload);
+    this.enqueue({ type: "turn", payload });
+    // payload.sessionId is itself a synthetic spool ID. Embedding it in the
+    // turn key lets the drain daemon compute the same key from the record.
+    return Promise.resolve({
+      id: `spool:${payload.sessionId}:${payload.harnessTurnId}`,
+    });
   }
 
   recordLlmMessage(payload: LlmMessagePayload): Promise<WriteResult> {
-    return this.recordWithId("llm-message", payload);
+    this.enqueue({ type: "llm-message", payload });
+    return Promise.resolve({
+      id: `spool:${payload.harnessId}:${payload.harnessMessageId}`,
+    });
   }
 
   recordSubscription(payload: SubscriptionPayload): Promise<WriteResult> {
-    return this.recordWithId("subscription", payload);
+    this.enqueue({ type: "subscription", payload });
+    return Promise.resolve({
+      id: `spool:${payload.harnessId}:${payload.planName}:${payload.periodStart}`,
+    });
   }
 
   recordToolCall(payload: ToolCallPayload): Promise<WriteResult> {
-    return this.recordWithId("tool-call", payload);
-  }
-
-  async recordRawEvent(payload: RawEventPayload): Promise<void> {
-    try {
-      await this.record("raw-event", payload);
-    } catch (err: unknown) {
-      writeEmergencySpool(spoolRecord("raw-event", payload));
-      console.warn(
-        "[pi-writer] token-tally record raw-event failed; wrote emergency spool:",
-        err,
-      );
-    }
-  }
-
-  async close(): Promise<void> {
-    // Every write is committed by its helper process. There is no long-lived
-    // SQLite handle in the Pi process, so close is intentionally a no-op.
-  }
-
-  private async recordWithId(
-    recordType: Exclude<RecordType, "raw-event">,
-    payload: unknown,
-  ): Promise<WriteResult> {
-    try {
-      const stdout = await this.record(recordType, payload);
-      const parsed = JSON.parse(stdout) as { id?: unknown };
-      if (typeof parsed.id !== "string" || parsed.id.length === 0) {
-        throw new Error(`token-tally record ${recordType}: missing id in response`);
-      }
-      return { id: parsed.id };
-    } catch (err: unknown) {
-      try {
-        writeEmergencySpool(spoolRecord(recordType, payload));
-      } catch (spoolErr: unknown) {
-        console.warn("[pi-writer] emergency spool write failed:", spoolErr);
-        throw err;
-      }
-
-      console.warn(
-        `[pi-writer] token-tally record ${recordType} failed; wrote emergency spool:`,
-        err,
-      );
-      return { id: fallbackId(recordType, payload) };
-    }
-  }
-
-  private record(recordType: RecordType, payload: unknown): Promise<string> {
-    const json = JSON.stringify(payload);
-    const args = [
-      ...this.prefixArgs,
-      "record",
-      "--type",
-      recordType,
-      "--json",
-      json,
-    ];
-
-    return new Promise((resolvePromise, reject) => {
-      const child = spawn(this.binary, args, {
-        cwd: this.cwd,
-        env: process.env,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-
-      let stdout = "";
-      let stderr = "";
-      const timer = setTimeout(() => {
-        child.kill("SIGTERM");
-        reject(new Error(`token-tally record ${recordType}: timed out`));
-      }, DEFAULT_TIMEOUT_MS);
-
-      child.stdout.setEncoding("utf8");
-      child.stdout.on("data", (chunk: string) => {
-        stdout += chunk;
-      });
-
-      child.stderr.setEncoding("utf8");
-      child.stderr.on("data", (chunk: string) => {
-        stderr += chunk;
-      });
-
-      child.on("error", (err) => {
-        clearTimeout(timer);
-        reject(err);
-      });
-
-      child.on("close", (code) => {
-        clearTimeout(timer);
-        if (code === 0) {
-          resolvePromise(stdout.trim());
-          return;
-        }
-        reject(
-          new Error(
-            `token-tally record ${recordType} exited ${code ?? "unknown"}: ${stderr.trim()}`,
-          ),
-        );
-      });
+    this.enqueue({ type: "tool-call", payload });
+    return Promise.resolve({
+      id: `spool:${payload.harnessId}:${payload.harnessToolCallId}`,
     });
   }
+
+  recordRawEvent(payload: RawEventPayload): Promise<void> {
+    this.enqueue({ type: "raw-event", payload });
+    return Promise.resolve();
+  }
+
+  // ── close — flush queue then rotate ──────────────────────────────────────
+
+  close(): Promise<void> {
+    if (this.closed) return Promise.resolve();
+
+    // Block new enqueues immediately, before the async flush completes, so
+    // late callers (e.g. async git capture) are dropped cleanly.
+    this.closed = true;
+
+    return this.writeQueue
+      .then(() => this.rotate())
+      .catch((err: unknown) => {
+        console.warn("[pi-writer:spool] error flushing queue before close:", err);
+        return this.rotate();
+      });
+  }
+
+  // ── internals ─────────────────────────────────────────────────────────────
+
+  private enqueue(record: SpoolRecord): void {
+    if (this.closed) {
+      // Silently drop writes after close(). This is expected for async git
+      // captures that resolve after session_shutdown — the metadata is
+      // best-effort and acceptable to lose on session end.
+      return;
+    }
+
+    // Chain onto the serial write queue. A failed write is caught and logged
+    // once so that one bad record does not block subsequent records.
+    this.writeQueue = this.writeQueue
+      .then(() =>
+        appendFile(
+          this.activeFilePath,
+          JSON.stringify(record) + "\n",
+          "utf8",
+        ),
+      )
+      .catch((err: unknown) => {
+        if (!this.errorLogged) {
+          console.warn(
+            "[pi-writer:spool] write error (further errors suppressed):",
+            err,
+          );
+          this.errorLogged = true;
+        }
+      });
+  }
+
+  private async rotate(): Promise<void> {
+    if (!existsSync(this.activeFilePath)) {
+      // Nothing was written during this session — no file to rotate.
+      return;
+    }
+
+    try {
+      const stats = await stat(this.activeFilePath);
+      if (stats.size === 0) {
+        // Empty file: clean up without leaving a zero-byte closed file.
+        await unlink(this.activeFilePath);
+        return;
+      }
+
+      const ts = Date.now();
+      const activeName = basename(this.activeFilePath);
+      // Active:   pi-<pid>-<open-ts>.ndjson
+      // Closed:   pi-<pid>-<open-ts>-<close-ts>.ndjson.closed
+      const closedName = activeName.replace(/\.ndjson$/, `-${ts}.ndjson.closed`);
+      await rename(this.activeFilePath, join(this.spoolDir, closedName));
+    } catch (err: unknown) {
+      console.warn("[pi-writer:spool] rotate error:", err);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Factory
+// ---------------------------------------------------------------------------
+
+/**
+ * Creates a SpoolBasedWriter that appends records to the default spool
+ * directory. The active file uses a PID-bearing name so the drain daemon (T6)
+ * can detect dead owner processes and promote stale active files.
+ */
+export function createCliAnalyticsWriter(): AnalyticsWriterLike {
+  const spoolDir = defaultSpoolDir();
+  try {
+    mkdirSync(spoolDir, { recursive: true });
+  } catch (err: unknown) {
+    // Non-fatal — the writer will fail on the first appendFile and log once.
+    console.warn("[pi-writer:spool] could not create spool directory:", err);
+  }
+  const ts = Date.now();
+  const activeFilePath = join(spoolDir, `pi-${process.pid}-${ts}.ndjson`);
+  return new SpoolBasedWriter(spoolDir, activeFilePath);
 }

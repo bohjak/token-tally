@@ -1,12 +1,16 @@
 /**
  * index.ts — Pi writer extension entrypoint for ToTally.
  *
- * Pure wiring: detects Pi version, opens AnalyticsWriter, registers hooks,
- * and closes the writer on session shutdown. No analytics logic lives here.
+ * Pure wiring: detects Pi version, opens a spool writer, registers hooks,
+ * and closes (rotates) the spool file on session shutdown. No analytics
+ * logic lives here.
  *
  * ## What this extension does
- * - Writes sessions, turns, LLM messages, and tool calls to the central
- *   ToTally store at ~/.local/share/token-tally/events.db.
+ * - Appends sessions, turns, LLM messages, and tool calls to a local NDJSON
+ *   spool file in ~/.local/share/token-tally/spool/ without spawning any
+ *   subprocess or touching the database in the hot path.
+ * - Rotates the spool file to .ndjson.closed on session_shutdown so the
+ *   drain daemon can persist it to ~/.local/share/token-tally/events.db.
  * - Captures git repo metadata at session start/end (async, non-blocking).
  *
  * ## What this extension does NOT do
