@@ -25,9 +25,10 @@
     "token-tally": "./bin/token-tally.js"
   },
   "scripts": {
-    "build": "tsc",
-    "build:sea": "tsc && node scripts/build-sea.mjs",
-    "typecheck": "tsc --noEmit",
+    "gen:pricing": "pnpm -w exec tsx scripts/generate-pricing.ts",
+    "build": "pnpm gen:pricing && tsc",
+    "build:sea": "pnpm gen:pricing && tsc && node scripts/build-sea.mjs",
+    "typecheck": "pnpm gen:pricing && tsc --noEmit",
     "test": "node --test 'tests/**/*.test.js' 'dist/cli/tests/**/*.test.js'"
   },
   "engines": {

@@ -3,6 +3,9 @@
 dist/
 node_modules/
 
+# Generated from pricing-sources/ (scripts/generate-pricing.ts)
+store/src/pricing/rates.json
+
 # Swift / Xcode local state
 .swiftpm/
 DerivedData/
