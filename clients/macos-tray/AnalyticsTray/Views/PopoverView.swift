@@ -263,15 +263,24 @@ struct PopoverView: View {
 
     private func openExplorer() {
         let dbPath = env.settings.databasePath
+        let homeDirectory = FileManager.default.homeDirectoryForCurrentUser.path
+        let installedCliPath = "\(homeDirectory)/.local/share/token-tally/bin/token-tally"
 
-        // token-tally explore is the shared launcher command. Spawn it via
-        // /usr/bin/env so token-tally is resolved from the user's PATH.
-        // The tray does not inherit the interactive shell PATH, but common
-        // install locations (/usr/local/bin, ~/.local/bin) are typically
-        // visible to /usr/bin/env on macOS.
+        // Prefer the absolute SEA binary installed by scripts/install-store.sh.
+        // Menu bar apps launched by Finder/login services do not inherit the
+        // user's interactive shell PATH, so `/usr/bin/env token-tally` is not
+        // reliable even when `token-tally` works in Terminal.
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["token-tally", "explore", "--db", dbPath]
+        if FileManager.default.isExecutableFile(atPath: installedCliPath) {
+            process.executableURL = URL(fileURLWithPath: installedCliPath)
+            process.arguments = ["explore", "--db", dbPath]
+        } else {
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = ["token-tally", "explore", "--db", dbPath]
+            var environment = ProcessInfo.processInfo.environment
+            environment["PATH"] = "\(homeDirectory)/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+            process.environment = environment
+        }
 
         // Fire-and-forget: the explorer server is intentionally long-lived
         // (it exits after its own idle timeout or on --stop). Redirect stdio
@@ -284,11 +293,10 @@ struct PopoverView: View {
         do {
             try process.run()
         } catch {
-            // token-tally is not on PATH. Show a brief actionable alert.
             let alert = NSAlert()
             alert.messageText = "token-tally not found"
             alert.informativeText =
-                "The token-tally CLI could not be launched from PATH.\n\n" +
+                "The token-tally CLI could not be launched.\n\n" +
                 "Run 'make install' with the macOS tray component selected " +
                 "to install it, then relaunch the app."
             alert.alertStyle = .warning
