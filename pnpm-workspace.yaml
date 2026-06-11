@@ -5,3 +5,6 @@ packages:
   - harnesses/cursor/writer
   - clients/pi-usage-command
   - clients/web-explorer
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
