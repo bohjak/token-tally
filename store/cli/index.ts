@@ -13,15 +13,16 @@
  * returned value.
  */
 
+import { spawn } from "child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "fs";
-import { dirname, join } from "path";
+import { basename, dirname, join } from "path";
 import { pathToFileURL } from "url";
 import { cmdImportLegacyPi } from "./import-legacy-pi";
 import { cmdImportPiSessions } from "./import-pi-sessions";
 import { formatDoctorReport, runDoctor } from "../src/doctor";
 import { ingestDir, ingestFile } from "../src/ingest";
 import type { IngestOptions } from "../src/ingest";
-import { defaultDatabasePath, defaultSpoolDir, defaultStateDir } from "../src/paths";
+import { defaultConfigDir, defaultDatabasePath, defaultSpoolDir, defaultStateDir } from "../src/paths";
 import { promoteStaleActiveFiles } from "../src/spool";
 import type { PromoteResult } from "../src/spool";
 import type {
@@ -477,6 +478,131 @@ export async function main(argv: string[]): Promise<number> {
 // explore
 // ---------------------------------------------------------------------------
 
+type InstallManifest = {
+  repoPath?: unknown;
+  nodePath?: unknown;
+  components?: {
+    store?: {
+      nodePath?: unknown;
+    };
+    webExplorer?: {
+      distServerPath?: unknown;
+    };
+  };
+};
+
+function readInstallManifest(): InstallManifest | null {
+  const manifestPath = join(defaultConfigDir(), "install.json");
+  if (!existsSync(manifestPath)) return null;
+
+  try {
+    return JSON.parse(readFileSync(manifestPath, "utf-8")) as InstallManifest;
+  } catch {
+    return null;
+  }
+}
+
+function resolveExplorerLauncherPath(): string | null {
+  // Development / source checkout path. This is correct when running through
+  // store/bin/token-tally.js or workspace scripts.
+  const sourceLauncherPath = join(
+    __dirname,
+    "../../../clients/web-explorer/dist/server/launcher.js",
+  );
+  if (existsSync(sourceLauncherPath)) return sourceLauncherPath;
+
+  // Installed SEA path. The web explorer is still built in the source checkout
+  // because its server imports package dependencies from the workspace. Use the
+  // install manifest to find that checkout when __dirname points inside the SEA
+  // executable rather than store/dist/cli.
+  const manifest = readInstallManifest();
+  const distServerPath = manifest?.components?.webExplorer?.distServerPath;
+  if (typeof distServerPath === "string") {
+    const manifestLauncherPath = join(dirname(distServerPath), "launcher.js");
+    if (existsSync(manifestLauncherPath)) return manifestLauncherPath;
+  }
+
+  const repoPath = manifest?.repoPath;
+  if (typeof repoPath === "string") {
+    const manifestLauncherPath = join(
+      repoPath,
+      "clients/web-explorer/dist/server/launcher.js",
+    );
+    if (existsSync(manifestLauncherPath)) return manifestLauncherPath;
+  }
+
+  return null;
+}
+
+function resolveSourceCliPath(): string | null {
+  const manifest = readInstallManifest();
+  const repoPath = manifest?.repoPath;
+  if (typeof repoPath !== "string") return null;
+
+  const sourceCliPath = join(repoPath, "store/bin/token-tally.js");
+  if (existsSync(sourceCliPath)) return sourceCliPath;
+
+  return null;
+}
+
+function buildExploreArgv(args: {
+  db?: string;
+  port?: number;
+  noOpen?: boolean;
+  printUrl?: boolean;
+  stop?: boolean;
+  idleTimeoutRaw?: string;
+  noIdleTimeout?: boolean;
+  foreground?: boolean;
+}): string[] {
+  const argv = ["explore"];
+  if (args.db !== undefined) argv.push("--db", args.db);
+  if (args.port !== undefined) argv.push("--port", String(args.port));
+  if (args.noOpen === true) argv.push("--no-open");
+  if (args.printUrl === true) argv.push("--print-url");
+  if (args.stop === true) argv.push("--stop");
+  if (args.idleTimeoutRaw !== undefined) argv.push("--idle-timeout", args.idleTimeoutRaw);
+  if (args.noIdleTimeout === true) argv.push("--no-idle-timeout");
+  if (args.foreground === true) argv.push("--foreground");
+  return argv;
+}
+
+function resolveNodePath(): string {
+  const override = process.env["TOKEN_TALLY_NODE"];
+  if (override !== undefined && override !== "") return override;
+
+  const manifest = readInstallManifest();
+  const storeNodePath = manifest?.components?.store?.nodePath;
+  if (typeof storeNodePath === "string" && storeNodePath !== "") return storeNodePath;
+
+  const nodePath = manifest?.nodePath;
+  if (typeof nodePath === "string" && nodePath !== "") return nodePath;
+
+  return "node";
+}
+
+async function runSourceExploreCli(sourceCliPath: string, argv: string[]): Promise<number> {
+  return new Promise((resolve) => {
+    const child = spawn(resolveNodePath(), [sourceCliPath, ...argv], {
+      stdio: "inherit",
+    });
+    child.on("error", (err) => {
+      process.stderr.write(
+        `token-tally explore: could not launch source CLI — ${err.message}\n`,
+      );
+      resolve(1);
+    });
+    child.on("exit", (code, signal) => {
+      if (code !== null) {
+        resolve(code);
+        return;
+      }
+      process.stderr.write(`token-tally explore: source CLI exited via ${signal}\n`);
+      resolve(1);
+    });
+  });
+}
+
 async function cmdExplore(args: {
   db?: string;
   port?: number;
@@ -516,19 +642,21 @@ async function cmdExplore(args: {
     foreground: args.foreground,
   };
 
-  // The store CLI is CommonJS; the web-explorer launcher is ESM (NodeNext).
-  // TypeScript in CommonJS mode transpiles import() to require(), which cannot
-  // load ESM modules. We use `new Function` to produce a native import() call
-  // that Node.js executes as real ESM dynamic import at runtime.
-  //
-  // The launcher lives at:
-  //   <repo>/clients/web-explorer/dist/server/launcher.js
-  // Relative to this compiled file at:
-  //   <repo>/store/dist/cli/index.js
-  const launcherAbsPath = join(
-    __dirname,
-    "../../../clients/web-explorer/dist/server/launcher.js",
-  );
+  const sourceCliPath = resolveSourceCliPath();
+  if (sourceCliPath !== null && basename(process.execPath) === "token-tally") {
+    return await runSourceExploreCli(sourceCliPath, buildExploreArgv(args));
+  }
+
+  const launcherAbsPath = resolveExplorerLauncherPath();
+  if (launcherAbsPath === null) {
+    process.stderr.write(
+      "token-tally: Web explorer is not installed.\n" +
+        "  Run `make install` with an explorer-capable client selected\n" +
+        "  (macOS tray or Pi usage command).\n",
+    );
+    return 1;
+  }
+
   // pathToFileURL ensures the path works cross-platform (especially Windows).
   const launcherUrl = pathToFileURL(launcherAbsPath).href;
 
