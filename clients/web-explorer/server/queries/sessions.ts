@@ -16,6 +16,8 @@ export type SessionRow = {
   billable_tokens: number;
   output_tokens: number;
   cached_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
   turns: number;
   tool_calls: number;
   duration_ms: number | null;
@@ -58,6 +60,22 @@ export type ToolCallRow = {
   is_error: number;
 };
 
+export const SESSION_SORT_COLUMNS: Record<string, string> = {
+  started_at: "s.started_at",
+  harness_id: "s.harness_id",
+  model_id: "model_id",
+  cost_usd: "cost_usd",
+  tokens: "tokens",
+  output_tokens: "output_tokens",
+  cache_read_tokens: "cache_read_tokens",
+  cache_write_tokens: "cache_write_tokens",
+  cache_pct: "CAST(cached_tokens AS REAL) / NULLIF(tokens, 0)",
+  turns: "turns",
+  tool_calls: "tool_calls",
+  duration_ms: "duration_ms",
+  repo: "COALESCE(s.repo_owner || '/' || s.repo_name, s.repo_remote, s.cwd)",
+};
+
 export type ListSessionsOpts = {
   from: number;
   to: number;
@@ -65,7 +83,9 @@ export type ListSessionsOpts = {
   model?: string;
   repo?: string;
   limit?: number;
-  cursor?: { started_at: number; id: string };
+  offset?: number;
+  sort?: string;
+  dir?: "asc" | "desc";
 };
 
 export type ListSessionsResult = {
@@ -75,6 +95,9 @@ export type ListSessionsResult = {
 
 export function listSessions(db: Database.Database, opts: ListSessionsOpts): ListSessionsResult {
   const limit = Math.min(opts.limit ?? 50, 200);
+  const offset = Math.max(opts.offset ?? 0, 0);
+  const sortExpr = SESSION_SORT_COLUMNS[opts.sort ?? ""] ?? "s.started_at";
+  const sortDir = opts.dir === "asc" ? "ASC" : "DESC";
   const params: (string | number)[] = [opts.from, opts.to];
   const clauses: string[] = [];
 
@@ -82,11 +105,6 @@ export function listSessions(db: Database.Database, opts: ListSessionsOpts): Lis
     const ph = opts.harnesses.map(() => "?").join(", ");
     clauses.push(`s.harness_id IN (${ph})`);
     params.push(...opts.harnesses);
-  }
-
-  if (opts.cursor) {
-    clauses.push(`(s.started_at < ? OR (s.started_at = ? AND s.id < ?))`);
-    params.push(opts.cursor.started_at, opts.cursor.started_at, opts.cursor.id);
   }
 
   if (opts.model) {
@@ -119,6 +137,10 @@ export function listSessions(db: Database.Database, opts: ListSessionsOpts): Lis
                    WHERE m.session_id = s.id AND m.cost_source != 'unknown'), 0) AS output_tokens,
          COALESCE((SELECT SUM(m.cache_read_tokens + m.cache_write_tokens) FROM llm_messages m
                    WHERE m.session_id = s.id AND m.cost_source != 'unknown'), 0) AS cached_tokens,
+         COALESCE((SELECT SUM(m.cache_read_tokens) FROM llm_messages m
+                   WHERE m.session_id = s.id AND m.cost_source != 'unknown'), 0) AS cache_read_tokens,
+         COALESCE((SELECT SUM(m.cache_write_tokens) FROM llm_messages m
+                   WHERE m.session_id = s.id AND m.cost_source != 'unknown'), 0) AS cache_write_tokens,
          (SELECT COUNT(*) FROM turns t WHERE t.session_id = s.id) AS turns,
          (SELECT COUNT(*) FROM tool_calls tc WHERE tc.session_id = s.id) AS tool_calls,
          (s.ended_at - s.started_at) AS duration_ms,
@@ -128,16 +150,14 @@ export function listSessions(db: Database.Database, opts: ListSessionsOpts): Lis
        FROM sessions s
        WHERE s.started_at >= ? AND s.started_at <= ?
          ${whereExtra}
-       ORDER BY s.started_at DESC, s.id DESC
-       LIMIT ?`
+       ORDER BY ${sortExpr} ${sortDir}, s.id DESC
+       LIMIT ? OFFSET ?`
     )
-    .all(...params, limit + 1) as SessionRow[];
+    .all(...params, limit + 1, offset) as SessionRow[];
 
   const hasMore = rows.length > limit;
   const result = hasMore ? rows.slice(0, limit) : rows;
-  const last = result[result.length - 1];
-  const nextCursor =
-    hasMore && last ? `${last.started_at}:${last.id}` : null;
+  const nextCursor = hasMore ? String(offset + limit) : null;
 
   return { rows: result, nextCursor };
 }
@@ -165,6 +185,10 @@ export function getSession(db: Database.Database, sessionId: string): GetSession
                    WHERE m.session_id = s.id AND m.cost_source != 'unknown'), 0) AS output_tokens,
          COALESCE((SELECT SUM(m.cache_read_tokens + m.cache_write_tokens) FROM llm_messages m
                    WHERE m.session_id = s.id AND m.cost_source != 'unknown'), 0) AS cached_tokens,
+         COALESCE((SELECT SUM(m.cache_read_tokens) FROM llm_messages m
+                   WHERE m.session_id = s.id AND m.cost_source != 'unknown'), 0) AS cache_read_tokens,
+         COALESCE((SELECT SUM(m.cache_write_tokens) FROM llm_messages m
+                   WHERE m.session_id = s.id AND m.cost_source != 'unknown'), 0) AS cache_write_tokens,
          (SELECT COUNT(*) FROM turns t WHERE t.session_id = s.id) AS turns,
          (SELECT COUNT(*) FROM tool_calls tc WHERE tc.session_id = s.id) AS tool_calls,
          (s.ended_at - s.started_at) AS duration_ms,

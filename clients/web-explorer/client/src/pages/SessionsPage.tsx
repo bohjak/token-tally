@@ -8,7 +8,7 @@ import FilterBar from "../components/FilterBar.tsx";
 import DataTable from "../components/DataTable.tsx";
 import { formatCost, formatDuration, formatRelativeDate, formatTokens } from "../lib/format.ts";
 import { formatCostDelta, formatDeltaPercent, formatNumberDelta } from "../lib/delta.ts";
-import type { ColumnDef } from "@tanstack/react-table";
+import type { ColumnDef, SortingState } from "@tanstack/react-table";
 
 function repoLabel(s: SessionRow): string {
   if (s.repo_owner && s.repo_name) return `${s.repo_owner}/${s.repo_name}`;
@@ -66,6 +66,33 @@ const columns: ColumnDef<SessionRow>[] = [
     cell: ({ getValue }) => formatTokens(getValue() as number),
   },
   {
+    accessorKey: "cache_read_tokens",
+    header: "Cache Read",
+    cell: ({ getValue }) => (
+      <span className="text-gray-500">{formatTokens(getValue() as number)}</span>
+    ),
+  },
+  {
+    accessorKey: "cache_write_tokens",
+    header: "Cache Write",
+    cell: ({ getValue }) => (
+      <span className="text-gray-500">{formatTokens(getValue() as number)}</span>
+    ),
+  },
+  {
+    id: "cache_pct",
+    header: "Cache %",
+    accessorFn: (row) => (row.tokens > 0 ? row.cached_tokens / row.tokens : null),
+    cell: ({ getValue }) => {
+      const v = getValue() as number | null;
+      return (
+        <span className="text-gray-500">
+          {v == null ? "—" : `${(Math.floor(v * 1000) / 10).toFixed(1)}%`}
+        </span>
+      );
+    },
+  },
+  {
     accessorKey: "turns",
     header: "Turns",
   },
@@ -84,6 +111,7 @@ export default function SessionsPage() {
   const f = useFilters();
   const navigate = useNavigate();
   const [rows, setRows] = useState<SessionRow[]>([]);
+  const [sorting, setSorting] = useState<SortingState>([{ id: "started_at", desc: true }]);
   const [cursor, setCursor] = useState<string | undefined>(undefined);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -106,6 +134,8 @@ export default function SessionsPage() {
           ...filters,
           limit: 50,
           cursor: reset ? undefined : cursor,
+          sort: sorting[0]?.id,
+          dir: sorting[0] ? (sorting[0].desc ? "desc" : "asc") : undefined,
         });
         setRows((prev) => (reset ? result.rows : [...prev, ...result.rows]));
         setHasMore(result.nextCursor != null);
@@ -117,7 +147,7 @@ export default function SessionsPage() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [filters.from, filters.to, JSON.stringify(filters.harnesses), filters.model, filters.repo, cursor]
+    [filters.from, filters.to, JSON.stringify(filters.harnesses), filters.model, filters.repo, cursor, JSON.stringify(sorting)]
   );
 
   useEffect(() => {
@@ -125,7 +155,7 @@ export default function SessionsPage() {
     setCursor(undefined);
     load(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters.from, filters.to, JSON.stringify(filters.harnesses), filters.model, filters.repo, refreshNonce]);
+  }, [filters.from, filters.to, JSON.stringify(filters.harnesses), filters.model, filters.repo, refreshNonce, JSON.stringify(sorting)]);
 
   return (
     <div className="p-6">
@@ -154,6 +184,8 @@ export default function SessionsPage() {
         <DataTable
           data={rows}
           columns={columns}
+          sorting={sorting}
+          onSortingChange={setSorting}
           onRowClick={(row) => navigate(`/sessions/${row.id}`)}
           emptyMessage={loading ? "Loading…" : "No sessions found"}
         />

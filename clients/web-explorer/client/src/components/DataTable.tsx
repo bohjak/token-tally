@@ -5,6 +5,7 @@ import {
   flexRender,
   type ColumnDef,
   type SortingState,
+  type OnChangeFn,
 } from "@tanstack/react-table";
 import { useState } from "react";
 
@@ -13,16 +14,28 @@ type Props<T> = {
   columns: ColumnDef<T>[];
   onRowClick?: (row: T) => void;
   emptyMessage?: string;
+  /** Controlled sorting state. When set together with onSortingChange, sorting is manual (server-side). */
+  sorting?: SortingState;
+  onSortingChange?: OnChangeFn<SortingState>;
 };
 
-export default function DataTable<T>({ data, columns, onRowClick, emptyMessage = "No data" }: Props<T>) {
-  const [sorting, setSorting] = useState<SortingState>([]);
+export default function DataTable<T>({
+  data,
+  columns,
+  onRowClick,
+  emptyMessage = "No data",
+  sorting: controlledSorting,
+  onSortingChange,
+}: Props<T>) {
+  const [localSorting, setLocalSorting] = useState<SortingState>([]);
+  const manual = controlledSorting !== undefined && onSortingChange !== undefined;
 
   const table = useReactTable({
     data,
     columns,
-    state: { sorting },
-    onSortingChange: setSorting,
+    state: { sorting: manual ? controlledSorting : localSorting },
+    onSortingChange: manual ? onSortingChange : setLocalSorting,
+    manualSorting: manual,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
   });

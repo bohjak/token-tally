@@ -214,12 +214,11 @@ function buildApp(db: Database, dbPath: string, updateActivity: () => void) {
     const opts = parseOpts(url);
     const limit = parseInt(url.searchParams.get("limit") ?? "50");
     const cursorParam = url.searchParams.get("cursor");
-    let cursor: { started_at: number; id: string } | undefined;
-    if (cursorParam) {
-      const [sa, id] = cursorParam.split(":");
-      if (sa && id) cursor = { started_at: parseInt(sa), id };
-    }
-    return c.json(listSessions(db, { ...opts, limit, cursor }));
+    const offset = cursorParam ? parseInt(cursorParam) || 0 : 0;
+    const sort = url.searchParams.get("sort") ?? undefined;
+    const dirParam = url.searchParams.get("dir");
+    const dir = dirParam === "asc" || dirParam === "desc" ? dirParam : undefined;
+    return c.json(listSessions(db, { ...opts, limit, offset, sort, dir }));
   });
 
   // Session detail

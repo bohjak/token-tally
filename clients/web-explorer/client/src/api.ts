@@ -106,6 +106,8 @@ export type SessionRow = {
   billable_tokens: number;
   output_tokens: number;
   cached_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
   turns: number;
   tool_calls: number;
   duration_ms: number | null;
@@ -213,11 +215,13 @@ export const api = {
 
   tools: (f: Filters) => apiFetch<{ rows: ToolRow[] }>("/api/tools", filtersToParams(f)),
 
-  sessions: (f: Filters & { limit?: number; cursor?: string }) =>
+  sessions: (f: Filters & { limit?: number; cursor?: string; sort?: string; dir?: "asc" | "desc" }) =>
     apiFetch<{ rows: SessionRow[]; nextCursor: string | null }>("/api/sessions", {
       ...filtersToParams(f),
       limit: f.limit,
       cursor: f.cursor,
+      sort: f.sort,
+      dir: f.dir,
     }),
 
   session: (id: string) => apiFetch<{
