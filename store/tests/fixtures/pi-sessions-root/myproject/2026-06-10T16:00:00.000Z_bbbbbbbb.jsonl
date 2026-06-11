@@ -1,0 +1,3 @@
+{"type":"session","version":3,"id":"disc-outside-range-uuid","timestamp":"2026-06-10T16:00:00.000Z","cwd":"/home/user/projects/myproject"}
+{"type":"message","id":"msg-u1","timestamp":"2026-06-10T16:00:01.000Z","message":{"role":"user"}}
+{"type":"message","id":"msg-a1","timestamp":"2026-06-10T16:00:10.000Z","message":{"role":"assistant","provider":"anthropic","model":"claude-opus-4-8","responseId":"resp_disc_outside_01","timestamp":1749571210000,"usage":{"input":100,"output":50,"cacheRead":0,"cacheWrite":0,"cost":{"input":0.0003,"output":0.00375,"cacheRead":0,"cacheWrite":0,"total":0.00405}},"stopReason":"stop","content":[]}}

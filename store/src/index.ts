@@ -39,6 +39,31 @@ export type {
   TableImportStats,
 } from "./importers/legacy-pi";
 
+// T8 — Pi session log importer
+export {
+  importPiSessionLogs,
+  defaultPiSessionsPath,
+} from "./importers/pi-session-log/importer";
+export { parsePiSessionFile } from "./importers/pi-session-log/parser";
+export {
+  transformSessionEvents,
+  dollarToMicros,
+} from "./importers/pi-session-log/transformer";
+export { discoverPiSessions, isInDateRange } from "./importers/pi-session-log/discovery";
+export type {
+  PiSessionImportOptions,
+  PiSessionImportResult,
+  SessionImportResult,
+  SessionImportCounts,
+  TransformedSession,
+  TransformedTurn,
+  TransformedMessage,
+  TransformedToolCall,
+  DiscoveredFile,
+  ParsedFile,
+  ParseError,
+} from "./importers/pi-session-log/types";
+
 // T1 (Cursor) — shared multi-provider pricing
 export { lookupRates, computeCostMicros } from "./pricing/index";
 export type { ModelRates, CostBreakdown, CostInput } from "./pricing/index";

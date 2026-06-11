@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync,
 import { dirname, join } from "path";
 import { pathToFileURL } from "url";
 import { cmdImportLegacyPi } from "./import-legacy-pi";
+import { cmdImportPiSessions } from "./import-pi-sessions";
 import { formatDoctorReport, runDoctor } from "../src/doctor";
 import { ingestDir, ingestFile } from "../src/ingest";
 import type { IngestOptions } from "../src/ingest";
@@ -260,20 +261,49 @@ export async function main(argv: string[]): Promise<number> {
         y
           .positional("importer", {
             type: "string",
-            choices: ["legacy-pi"] as const,
+            choices: ["legacy-pi", "pi-sessions"] as const,
             demandOption: true,
             describe: "Importer name",
           })
           .option("source", {
             type: "string",
             describe:
-              "Path to the source database. Default: ~/.pi/analytics/events.db",
+              "[legacy-pi] Path to the source database. Default: ~/.pi/analytics/events.db",
+          })
+          .option("path", {
+            type: "string",
+            describe:
+              "[pi-sessions] Sessions root directory. Default: ~/.pi/agent/sessions",
+          })
+          .option("from", {
+            type: "string",
+            describe:
+              "[pi-sessions] Import sessions starting on/after this UTC date (YYYY-MM-DD, inclusive).",
+          })
+          .option("to", {
+            type: "string",
+            describe:
+              "[pi-sessions] Import sessions starting before this UTC date (YYYY-MM-DD, exclusive).",
+          })
+          .option("until", {
+            type: "string",
+            describe:
+              "[pi-sessions] Skip individual messages with timestamp >= this ISO-8601 instant (boundary cutoff).",
+          })
+          .option("dry-run", {
+            type: "boolean",
+            describe:
+              "[pi-sessions] Parse and report without writing to the database.",
           })
           .epilog(
             "Importers:\n" +
-              "  legacy-pi  Import from the legacy Pi analytics database.\n" +
-              "             Idempotent: repeat runs produce no duplicate rows.\n" +
-              "             The source database is never modified or deleted.",
+              "  legacy-pi    Import from the legacy Pi analytics database.\n" +
+              "               Idempotent: repeat runs produce no duplicate rows.\n" +
+              "               The source database is never modified or deleted.\n\n" +
+              "  pi-sessions  Import from Pi session log files (~/.pi/agent/sessions/).\n" +
+              "               --from / --to are UTC day bounds; --to is exclusive.\n" +
+              "               Use --until <ISO-ts> as a boundary cutoff (e.g. writer re-enable instant).\n" +
+              "               Use --dry-run to preview without writing.",
           ),
       async (args) => {
         if (args.importer === "legacy-pi") {
@@ -281,12 +311,21 @@ export async function main(argv: string[]): Promise<number> {
           // from the yargs-parsed values.
           const importArgs = args.source ? ["--source", args.source] : [];
           exitCode = await cmdImportLegacyPi(importArgs, args.db);
+        } else if (args.importer === "pi-sessions") {
+          exitCode = await cmdImportPiSessions({
+            path: args.path as string | undefined,
+            from: args.from as string | undefined,
+            to: args.to as string | undefined,
+            until: args.until as string | undefined,
+            dryRun: (args["dry-run"] as boolean | undefined) ?? false,
+            db: args.db,
+          });
         } else {
           // yargs' choices validation prevents reaching this branch at runtime,
           // but TypeScript doesn't know that.
           process.stderr.write(
             `token-tally import: unknown importer '${String(args.importer)}'.\n` +
-              "  Available importers: legacy-pi\n",
+              "  Available importers: legacy-pi, pi-sessions\n",
           );
           exitCode = 1;
         }

@@ -1,0 +1,6 @@
+{"type":"session","version":3,"id":"dddddddd-0000-0000-0000-000000000001","timestamp":"2026-06-09T14:30:00.000Z","cwd":"/home/user/projects/myproject"}
+{"type":"message","id":"msg-u1","timestamp":"2026-06-09T14:30:01.000Z","message":{"role":"user"}}
+THIS IS NOT JSON AT ALL
+{"type":"message","id":"msg-a1","timestamp":"2026-06-09T14:30:05.000Z","message":{"role":"assistant","provider":"anthropic","model":"claude-opus-4-8","responseId":"resp_aftermalformed","timestamp":1749472205000,"usage":{"input":60,"output":30,"cacheRead":0,"cacheWrite":0,"cost":{"input":0.00018,"output":0.00225,"cacheRead":0,"cacheWrite":0,"total":0.00243}},"stopReason":"stop","content":[]}}
+{"type":"unknown_future_event","timestamp":"2026-06-09T14:30:10.000Z","someNewField":42}
+{"not_an_object_at_all": true, "timestamp": "2026-06-09T14:30:11.000Z"}
