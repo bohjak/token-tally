@@ -94,6 +94,21 @@ main() {
   cp "${repo_root}/store/dist/sea/token-tally" "${sea_dir}/token-tally"
   cp "${repo_root}/store/dist/sea/better_sqlite3.node" "${sea_dir}/better_sqlite3.node"
   chmod +x "${sea_dir}/token-tally"
+
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    # macOS can reject a copied SEA binary with "Killed: 9" even when the
+    # source build output was ad-hoc signed successfully. Re-sign the final
+    # installed path so AMFI validates exactly the file the installer executes.
+    codesign --force --sign - "${sea_dir}/token-tally" >/dev/null 2>&1 || {
+      err "codesign failed for installed token-tally binary"
+      return 1
+    }
+    codesign --force --sign - "${sea_dir}/better_sqlite3.node" >/dev/null 2>&1 || {
+      err "codesign failed for installed SQLite native addon"
+      return 1
+    }
+  fi
+
   info "SEA binary installed to ${sea_dir}/"
 
   # ---- Symlink into ~/.local/bin ----
