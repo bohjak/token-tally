@@ -762,7 +762,21 @@ async function cmdMigrate(
       dbPath,
       harnessName: "token-tally-cli",
     });
+
+    const { writable, reason } = writer.status;
     await writer.close();
+
+    if (!writable) {
+      // The DB was unavailable (schema too new, corrupt file, etc.) and the
+      // writer fell back to spool-only mode. Migrations were NOT applied.
+      process.stderr.write(
+        `token-tally migrate: database is not writable — ${
+          reason ?? "reason unknown"
+        }. Migrations may not have been applied.\n`,
+      );
+      return 1;
+    }
+
     process.stdout.write(`token-tally migrate: database ready at ${dbPath}\n`);
     return 0;
   } catch (err) {

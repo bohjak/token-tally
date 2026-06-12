@@ -63,7 +63,10 @@ const MIGRATION_SETS: ReadonlyArray<{
  * Runs all pending migration sets against the database.
  *
  * Safe to call on an already-migrated database — sets that have already been
- * applied are skipped. Each set that runs is wrapped in a single transaction.
+ * applied are skipped. Each set that runs is wrapped in a BEGIN IMMEDIATE
+ * transaction with an in-transaction version re-check, making concurrent
+ * fresh writers safe even for future migrations that use ALTER TABLE …
+ * ADD COLUMN (which has no IF NOT EXISTS guard in SQLite).
  *
  * Throws if a migration file cannot be read or if the SQL fails.
  */
@@ -76,7 +79,7 @@ export function runMigrations(db: Database.Database): void {
       continue;
     }
 
-    applyMigrationSet(db, migration.files as string[]);
+    applyMigrationSet(db, migration.version, migration.files as string[]);
   }
 }
 
@@ -105,11 +108,27 @@ function getCurrentSchemaVersion(db: Database.Database): number {
 
 function applyMigrationSet(
   db: Database.Database,
+  targetVersion: number,
   files: string[]
 ): void {
-  // Run the full set inside one transaction so that a mid-migration failure
-  // leaves the database in its previous clean state rather than half-migrated.
+  // Use BEGIN IMMEDIATE to acquire the write lock before reading schema_version
+  // inside the transaction. This prevents two concurrent fresh writers from
+  // both seeing the old version and both executing the same migration set.
+  // The winning writer runs the set; when the losing writer gets the lock it
+  // re-checks the version, finds it already advanced, and skips cleanly.
+  //
+  // This is especially important for future migrations that use
+  // ALTER TABLE … ADD COLUMN, which has no IF NOT EXISTS guard in SQLite and
+  // would throw "duplicate column name" on the second concurrent runner.
   db.transaction(() => {
+    // Re-check version inside the exclusive transaction. If a concurrent
+    // writer already applied this migration set while we were waiting for the
+    // write lock, skip to stay idempotent.
+    const current = getCurrentSchemaVersion(db);
+    if (current >= targetVersion) {
+      return;
+    }
+
     for (const file of files) {
       const sql = readFileSync(file, "utf8");
       // db.exec() runs multiple statements separated by semicolons, which is
@@ -117,5 +136,5 @@ function applyMigrationSet(
       // does not bind parameters — fine here since the files have no params.
       db.exec(sql);
     }
-  })();
+  }).immediate();
 }

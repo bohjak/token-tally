@@ -138,6 +138,26 @@ export async function ingestFile(
     // Explicitly no full-directory drain — this function processes one file.
   });
 
+  // Abort early if the DB is not writable. Proceeding in spool-only mode would
+  // silently re-spool the file's records into a new spool file, delete the
+  // source, and report success while zero rows actually reach SQLite.
+  if (!writer.status.writable) {
+    const reason = writer.status.reason;
+    await writer.close();
+    return {
+      ingested: 0,
+      skipped: 0,
+      skippedByBound: 0,
+      quarantined: 0,
+      errors: [{
+        file: targetPath,
+        message: `Database is not writable${
+          reason != null ? `: ${reason}` : ""
+        }. Ingest aborted; file left in place.`,
+      }],
+    };
+  }
+
   const errors: Array<{ file: string; message: string }> = [];
   let ingested = 0;
   let quarantined = 0;
@@ -252,6 +272,26 @@ export async function ingestDir(
     // Explicit no-drain: this writer is opened solely for its DB connection.
     // We handle drain manually below.
   });
+
+  // Abort early if the DB is not writable. Proceeding in spool-only mode would
+  // re-spool every closed file into a new spool file, delete the originals,
+  // and report success while zero rows actually reach SQLite.
+  if (!writer.status.writable) {
+    const reason = writer.status.reason;
+    await writer.close();
+    return {
+      ingested: 0,
+      skipped: activeFiles.length,
+      skippedByBound: closedFiles.length,
+      quarantined: 0,
+      errors: [{
+        file: targetDir,
+        message: `Database is not writable${
+          reason != null ? `: ${reason}` : ""
+        }. Ingest aborted; all closed files left in place.`,
+      }],
+    };
+  }
 
   let ingested = 0;
   let quarantined = 0;

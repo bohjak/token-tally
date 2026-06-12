@@ -12,7 +12,7 @@ export * from "./types";
 
 // T5 — writer, connection, spool
 export { AnalyticsWriter } from "./writer";
-export type { WriterDrainOptions, WriterOpenOptions } from "./writer";
+export type { WriterDrainOptions, WriterOpenOptions, WriterStatus } from "./writer";
 export {
   MIN_SUPPORTED_SCHEMA_VERSION,
   MAX_KNOWN_SCHEMA_VERSION,

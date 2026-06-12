@@ -43,7 +43,7 @@ import {
 } from "./connection";
 import { runMigrations } from "./migrations";
 import { defaultDatabasePath, defaultSpoolDir } from "./paths";
-import { SpoolWriter, drainClosedSpoolFiles, drainSingleSpoolFile } from "./spool";
+import { SpoolWriter, drainClosedSpoolFiles, drainSingleSpoolFile, quarantineSpoolFile, defaultFailedDir } from "./spool";
 import type { BoundedDrainOptions, SpoolRecord } from "./spool";
 import type {
   HarnessPayload,
@@ -207,8 +207,15 @@ function prepareStatements(db: Database.Database): PreparedStatements {
       )
       ON CONFLICT (harness_id, harness_message_id) DO UPDATE SET
         session_id              = excluded.session_id,
-        turn_id                 = excluded.turn_id,
-        ts                      = excluded.ts,
+        -- Preserve stored turn_id when the incoming row carries NULL (e.g. a
+        -- backfill pass that updates only tokens/costs). A non-null incoming
+        -- turn_id always wins, so full-attribution replays work correctly.
+        turn_id                 = COALESCE(excluded.turn_id, llm_messages.turn_id),
+        -- Preserve original event ts when the incoming row uses ts=0 as the
+        -- sentinel meaning "do not change timestamp". Writers that wish to
+        -- update tokens/costs without altering the original event time pass
+        -- ts=0. A real (non-zero) timestamp always wins.
+        ts                      = COALESCE(NULLIF(excluded.ts, 0), llm_messages.ts),
         provider                = excluded.provider,
         model_id                = excluded.model_id,
         input_tokens            = excluded.input_tokens,
@@ -328,7 +335,56 @@ function tryOpenDb(dbPath: string): OpenDbOutcome {
 
 type WriterDbState =
   | { writable: true; db: Database.Database; stmts: PreparedStatements }
-  | { writable: false };
+  | { writable: false; reason?: string };
+
+// ---------------------------------------------------------------------------
+// Retryable-error classification
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns true for SQLite errors that are safe to spool for later retry:
+ *   SQLITE_BUSY and variants (SQLITE_BUSY_SNAPSHOT) — lock held by another writer.
+ *   SQLITE_IOERR family — I/O error, potentially transient.
+ *
+ * Returns false for permanent errors that will fail on every replay attempt:
+ *   SQLITE_CONSTRAINT — FK violation, CHECK violation, UNIQUE conflict.
+ *   SQLITE_ERROR      — binding error, SQL syntax error.
+ *
+ * Non-retryable errors must propagate so callers receive a clear failure
+ * instead of silently discarding data into a spool that will re-fail on drain.
+ */
+function isRetryableSqliteError(err: unknown): boolean {
+  if (err == null || typeof err !== "object") return false;
+  const code = (err as { code?: unknown }).code;
+  if (typeof code !== "string") return false;
+  return code.startsWith("SQLITE_BUSY") || code.startsWith("SQLITE_IOERR");
+}
+
+// ---------------------------------------------------------------------------
+// Token / cost coercion
+// ---------------------------------------------------------------------------
+
+/**
+ * Rounds a numeric payload field to the nearest integer and validates that
+ * the result is non-negative and finite.
+ *
+ * - Float values are rounded with Math.round (0.5 rounds up). This is the
+ *   documented contract for all cost and token fields; callers that need
+ *   exact integers should pass them as such.
+ * - Negative values and non-finite values (NaN, Infinity) are rejected by
+ *   throwing RangeError. These indicate a bug in the writer plugin.
+ * - undefined / null coerces to 0.
+ */
+function coerceToNonNegativeInt(val: number | undefined | null, fieldName: string): number {
+  if (val === undefined || val === null) return 0;
+  const rounded = Math.round(val);
+  if (!isFinite(rounded) || rounded < 0) {
+    throw new RangeError(
+      `LlmMessagePayload: ${fieldName} must be a non-negative finite number; got ${val}`
+    );
+  }
+  return rounded;
+}
 
 // ---------------------------------------------------------------------------
 // Internal write helpers (called directly for both live writes and spool drain)
@@ -398,13 +454,22 @@ function writeLlmMessage(
 ): string {
   const id = randomUUID();
 
-  // Compute the four breakdown columns (defaulting omitted fields to 0).
-  const costInputMicros = payload.costInputMicros ?? 0;
-  const costOutputMicros = payload.costOutputMicros ?? 0;
-  const costCacheReadMicros = payload.costCacheReadMicros ?? 0;
-  const costCacheWriteMicros = payload.costCacheWriteMicros ?? 0;
+  // Validate and coerce token/cost fields to non-negative integers.
+  // Float values are rounded with Math.round (documented contract).
+  // Negative or non-finite values throw RangeError — they indicate a bug in
+  // the writer plugin and must not be silently stored or spooled.
+  const inputTokens = coerceToNonNegativeInt(payload.inputTokens, "inputTokens");
+  const outputTokens = coerceToNonNegativeInt(payload.outputTokens, "outputTokens");
+  const cacheReadTokens = coerceToNonNegativeInt(payload.cacheReadTokens, "cacheReadTokens");
+  const cacheWriteTokens = coerceToNonNegativeInt(payload.cacheWriteTokens, "cacheWriteTokens");
+  const costInputMicros = coerceToNonNegativeInt(payload.costInputMicros, "costInputMicros");
+  const costOutputMicros = coerceToNonNegativeInt(payload.costOutputMicros, "costOutputMicros");
+  const costCacheReadMicros = coerceToNonNegativeInt(payload.costCacheReadMicros, "costCacheReadMicros");
+  const costCacheWriteMicros = coerceToNonNegativeInt(payload.costCacheWriteMicros, "costCacheWriteMicros");
   // cost_total_micros is the writer-maintained cached sum. The DB CHECK
-  // enforces exact equality with the four breakdown columns.
+  // enforces exact equality with the four breakdown columns. Because all four
+  // parts are rounded to integers above, their sum is also an integer and
+  // the CHECK strict-equality invariant is always satisfiable.
   const costTotalMicros =
     costInputMicros +
     costOutputMicros +
@@ -420,10 +485,10 @@ function writeLlmMessage(
     ts: payload.ts,
     provider: payload.provider ?? null,
     modelId: payload.modelId ?? null,
-    inputTokens: payload.inputTokens ?? 0,
-    outputTokens: payload.outputTokens ?? 0,
-    cacheReadTokens: payload.cacheReadTokens ?? 0,
-    cacheWriteTokens: payload.cacheWriteTokens ?? 0,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
     costInputMicros,
     costOutputMicros,
     costCacheReadMicros,
@@ -572,6 +637,24 @@ function dispatchSpoolRecord(
 }
 
 // ---------------------------------------------------------------------------
+// Public status type
+// ---------------------------------------------------------------------------
+
+/**
+ * Reported by `AnalyticsWriter.status`. Consumed by ingest functions and the
+ * migrate CLI to detect when the writer is in spool-only mode.
+ */
+export type WriterStatus = {
+  /** true when the writer holds an open DB connection and writes go to SQLite. */
+  writable: boolean;
+  /**
+   * When writable is false, the human-readable reason the DB connection could
+   * not be established (schema too new, file corrupt, persistent BUSY, etc.).
+   */
+  reason?: string;
+};
+
+// ---------------------------------------------------------------------------
 // AnalyticsWriter
 // ---------------------------------------------------------------------------
 
@@ -649,7 +732,10 @@ export class AnalyticsWriter {
     const dbState: WriterDbState =
       outcome.kind === "ok"
         ? { writable: true, db: outcome.db, stmts: outcome.stmts }
-        : { writable: false };
+        : {
+            writable: false,
+            reason: outcome.kind === "unavailable" ? outcome.reason : undefined,
+          };
 
     const writer = new AnalyticsWriter(dbState, spool, spoolDir, drainOptions);
 
@@ -660,6 +746,27 @@ export class AnalyticsWriter {
     }
 
     return writer;
+  }
+
+  // -------------------------------------------------------------------------
+  // Status
+  // -------------------------------------------------------------------------
+
+  /**
+   * Reports whether the writer has an active DB connection.
+   *
+   * `writable: false` means the writer opened in spool-only mode (DB was
+   * unavailable at open time). In that mode all record calls append to the
+   * NDJSON spool file rather than writing directly to SQLite.
+   *
+   * Ingest functions and the migrate CLI consume this to detect false-success
+   * scenarios where no rows would actually reach the database.
+   */
+  get status(): WriterStatus {
+    if (this.dbState.writable) {
+      return { writable: true };
+    }
+    return { writable: false, reason: this.dbState.reason };
   }
 
   // -------------------------------------------------------------------------
@@ -751,7 +858,12 @@ export class AnalyticsWriter {
       try {
         withBusyRetry(() => writeRawEvent(stmts, payload));
         return;
-      } catch {
+      } catch (err) {
+        // Same retryability policy as withDbOrSpool: only spool on BUSY / I/O.
+        // Constraint or binding errors propagate to the caller.
+        if (!isRetryableSqliteError(err)) {
+          throw err;
+        }
         // Fall through to spool.
       }
     }
@@ -849,8 +961,16 @@ export class AnalyticsWriter {
       const stmts = this.dbState.stmts;
       try {
         return withBusyRetry(() => dbFn(stmts));
-      } catch {
-        // DB write failed (busy after retries, or other error) — spool instead.
+      } catch (err) {
+        // Only spool on retryable errors (SQLITE_BUSY budget exhausted, I/O).
+        // Non-retryable errors (FK violations, CHECK violations, binding errors)
+        // propagate to the caller: they indicate bad payload data that will
+        // fail the same way on every drain attempt and must never be silently
+        // discarded into a spool that can never be committed.
+        if (!isRetryableSqliteError(err)) {
+          throw err;
+        }
+        // Retryable (SQLITE_BUSY after budget exhausted) — fall through to spool.
       }
     }
 
@@ -891,6 +1011,10 @@ export class AnalyticsWriter {
    * Drains one specific closed spool file into the DB. Used for the writer's
    * own just-rotated file so close/flush can preserve durability without a
    * full-directory scan.
+   *
+   * If drain fails, the file is quarantined to the adjacent `<spoolDir>.failed/`
+   * directory so it is not retried on every subsequent close. If quarantine
+   * also fails the file stays in the spool directory for the daemon to inspect.
    */
   private runSingleFileDrain(filePath: string): void {
     if (!this.dbState.writable) return;
@@ -908,8 +1032,16 @@ export class AnalyticsWriter {
       }
     });
 
-    drainSingleSpoolFile(filePath, (records) => {
+    const result = drainSingleSpoolFile(filePath, (records) => {
       drainTransaction(records);
     });
+
+    if (result.error != null) {
+      // Drain failed — quarantine so the file is not retried from spool on
+      // every subsequent writer open or close. If quarantine also fails the
+      // file stays in the spool directory where the daemon can inspect it.
+      const failedDir = defaultFailedDir(this.spoolDir);
+      quarantineSpoolFile(filePath, failedDir, result.error.message, result.firstRecord ?? null);
+    }
   }
 }
