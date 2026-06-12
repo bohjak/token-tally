@@ -9,6 +9,11 @@
  * Design: checks are functions that return typed finding values rather than
  * throwing. This lets the caller collect all findings and decide how to
  * display them without intermediate failure branches.
+ *
+ * Duplicate checks are semantic, not primary-key checks. SQLite already
+ * enforces primary keys and writer idempotency keys; the doctor looks for
+ * rows that have different IDs but the same externally-observable payload,
+ * which can happen when data is replayed through different import paths.
  */
 
 import Database from "better-sqlite3";
@@ -78,6 +83,10 @@ const RAW_EVENTS_SAMPLE_SIZE = 100;
 // flagged as potentially stale — the harness may have crashed without closing.
 const STALE_SESSION_THRESHOLD_MS = 24 * 60 * 60 * 1000;
 
+// Maximum duplicate groups to include in structured finding samples. Counts
+// always cover the full table; only detail samples are capped.
+const DUPLICATE_SAMPLE_SIZE = 5;
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -121,10 +130,13 @@ export function runDoctor(dbPath: string): DoctorReport {
     // 4. Foreign-key integrity (quick PRAGMA check).
     findings.push(checkForeignKeys(db));
 
-    // 5. Stale sessions.
+    // 5. Semantic duplicate records.
+    findings.push(...checkDuplicateRecords(db));
+
+    // 6. Stale sessions.
     findings.push(...checkStaleSessions(db, generatedAt));
 
-    // 6. Raw events suspicious key scan.
+    // 7. Raw events suspicious key scan.
     findings.push(...checkRawEventsSensitiveKeys(db));
   } finally {
     db.close();
@@ -287,15 +299,197 @@ function checkForeignKeys(db: Database.Database): Finding {
   }
 }
 
-function checkStaleSessions(db: Database.Database, nowMs: number): Finding[] {
-  // Check that the sessions table exists before querying it.
-  const tableExists = db
+function tableExists(db: Database.Database, table: string): boolean {
+  const row = db
     .prepare(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'"
+      "SELECT name FROM sqlite_master WHERE type='table' AND name=?"
     )
-    .get() as { name: string } | undefined;
+    .get(table) as { name: string } | undefined;
 
-  if (tableExists == null) {
+  return row != null;
+}
+
+function checkDuplicateRecords(db: Database.Database): Finding[] {
+  return [
+    checkDuplicateLlmMessages(db),
+    checkDuplicateToolCalls(db),
+  ];
+}
+
+function checkDuplicateLlmMessages(db: Database.Database): Finding {
+  if (!tableExists(db, "llm_messages") || !tableExists(db, "sessions")) {
+    return {
+      code: "duplicate_llm_messages_skipped",
+      severity: "warning",
+      message: "LLM message duplicate check skipped because required tables are missing.",
+    };
+  }
+
+  const countRow = db
+    .prepare(
+      `WITH duplicate_groups AS (
+         SELECT COUNT(*) AS row_count
+         FROM llm_messages m
+         JOIN sessions s ON s.id = m.session_id
+         GROUP BY
+           m.harness_id,
+           m.ts,
+           COALESCE(m.provider, ''),
+           COALESCE(m.model_id, ''),
+           m.input_tokens,
+           m.output_tokens,
+           m.cache_read_tokens,
+           m.cache_write_tokens,
+           m.cost_total_micros,
+           COALESCE(s.cwd, '')
+         HAVING COUNT(*) > 1
+       )
+       SELECT
+         COUNT(*) AS group_count,
+         COALESCE(SUM(row_count - 1), 0) AS duplicate_count
+       FROM duplicate_groups`
+    )
+    .get() as { group_count: number; duplicate_count: number };
+
+  if (countRow.group_count === 0) {
+    return {
+      code: "duplicate_llm_messages_ok",
+      severity: "ok",
+      message: "No semantic duplicate LLM message rows detected.",
+    };
+  }
+
+  const sample = db
+    .prepare(
+      `SELECT
+         m.harness_id,
+         m.ts,
+         COALESCE(m.provider, '') AS provider,
+         COALESCE(m.model_id, '') AS model_id,
+         m.input_tokens,
+         m.output_tokens,
+         m.cache_read_tokens,
+         m.cache_write_tokens,
+         m.cost_total_micros,
+         COALESCE(s.cwd, '') AS cwd,
+         COUNT(*) AS row_count,
+         GROUP_CONCAT(m.id) AS ids
+       FROM llm_messages m
+       JOIN sessions s ON s.id = m.session_id
+       GROUP BY
+         m.harness_id,
+         m.ts,
+         COALESCE(m.provider, ''),
+         COALESCE(m.model_id, ''),
+         m.input_tokens,
+         m.output_tokens,
+         m.cache_read_tokens,
+         m.cache_write_tokens,
+         m.cost_total_micros,
+         COALESCE(s.cwd, '')
+       HAVING COUNT(*) > 1
+       ORDER BY m.ts DESC
+       LIMIT ${DUPLICATE_SAMPLE_SIZE}`
+    )
+    .all() as Array<Record<string, unknown>>;
+
+  return {
+    code: "duplicate_llm_messages",
+    severity: "warning",
+    message:
+      `${countRow.duplicate_count} likely duplicate LLM message row(s) ` +
+      `across ${countRow.group_count} group(s). Replayed imports or spool ` +
+      `recovery may have counted the same model call more than once.`,
+    detail: {
+      groupCount: countRow.group_count,
+      duplicateCount: countRow.duplicate_count,
+      sample,
+    },
+  };
+}
+
+function checkDuplicateToolCalls(db: Database.Database): Finding {
+  if (!tableExists(db, "tool_calls") || !tableExists(db, "sessions")) {
+    return {
+      code: "duplicate_tool_calls_skipped",
+      severity: "warning",
+      message: "Tool-call duplicate check skipped because required tables are missing.",
+    };
+  }
+
+  const countRow = db
+    .prepare(
+      `WITH duplicate_groups AS (
+         SELECT COUNT(*) AS row_count
+         FROM tool_calls t
+         JOIN sessions s ON s.id = t.session_id
+         GROUP BY
+           t.harness_id,
+           t.started_at,
+           COALESCE(t.ended_at, -1),
+           t.tool_name,
+           t.is_error,
+           COALESCE(s.cwd, '')
+         HAVING COUNT(*) > 1
+       )
+       SELECT
+         COUNT(*) AS group_count,
+         COALESCE(SUM(row_count - 1), 0) AS duplicate_count
+       FROM duplicate_groups`
+    )
+    .get() as { group_count: number; duplicate_count: number };
+
+  if (countRow.group_count === 0) {
+    return {
+      code: "duplicate_tool_calls_ok",
+      severity: "ok",
+      message: "No semantic duplicate tool-call rows detected.",
+    };
+  }
+
+  const sample = db
+    .prepare(
+      `SELECT
+         t.harness_id,
+         t.started_at,
+         t.ended_at,
+         t.tool_name,
+         t.is_error,
+         COALESCE(s.cwd, '') AS cwd,
+         COUNT(*) AS row_count,
+         GROUP_CONCAT(t.id) AS ids
+       FROM tool_calls t
+       JOIN sessions s ON s.id = t.session_id
+       GROUP BY
+         t.harness_id,
+         t.started_at,
+         COALESCE(t.ended_at, -1),
+         t.tool_name,
+         t.is_error,
+         COALESCE(s.cwd, '')
+       HAVING COUNT(*) > 1
+       ORDER BY t.started_at DESC
+       LIMIT ${DUPLICATE_SAMPLE_SIZE}`
+    )
+    .all() as Array<Record<string, unknown>>;
+
+  return {
+    code: "duplicate_tool_calls",
+    severity: "warning",
+    message:
+      `${countRow.duplicate_count} likely duplicate tool-call row(s) ` +
+      `across ${countRow.group_count} group(s). Replayed imports or spool ` +
+      `recovery may have counted the same tool invocation more than once.`,
+    detail: {
+      groupCount: countRow.group_count,
+      duplicateCount: countRow.duplicate_count,
+      sample,
+    },
+  };
+}
+
+function checkStaleSessions(db: Database.Database, nowMs: number): Finding[] {
+  if (!tableExists(db, "sessions")) {
     // Missing-table finding is already emitted by checkRequiredTables; skip.
     return [];
   }
@@ -342,13 +536,7 @@ function checkStaleSessions(db: Database.Database, nowMs: number): Finding[] {
 
 function checkRawEventsSensitiveKeys(db: Database.Database): Finding[] {
   // raw_events is optional — skip if absent.
-  const tableExists = db
-    .prepare(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name='raw_events'"
-    )
-    .get() as { name: string } | undefined;
-
-  if (tableExists == null) {
+  if (!tableExists(db, "raw_events")) {
     return [];
   }
 

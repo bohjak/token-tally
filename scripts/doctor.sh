@@ -3,12 +3,13 @@
 #
 # Checks:
 #   1. token-tally CLI: available in PATH and reports healthy database.
-#   2. Tray app:        /Applications/ToTally.app exists.
-#   3. Pi extensions:   ~/.pi/agent/extensions/token-tally-{writer,usage} point
+#   2. Drain daemon:    launchd/systemd registration and live daemon state.
+#   3. Tray app:        /Applications/ToTally.app exists.
+#   4. Pi extensions:   ~/.pi/agent/extensions/token-tally-{writer,usage} point
 #                       to the correct repo paths.
-#   4. Claude Code:     hook binary and ~/.claude/settings.json entries.
-#   5. Cursor hooks:    hook binary and ~/.cursor/hooks.json entries.
-#   6. Install manifest: present and parseable.
+#   5. Claude Code:     hook binary and ~/.claude/settings.json entries.
+#   6. Cursor hooks:    hook binary and ~/.cursor/hooks.json entries.
+#   7. Install manifest: present and parseable.
 #
 # Legacy Pi data is not checked here; use 'token-tally import legacy-pi'
 # to migrate it into the central store.
@@ -95,6 +96,94 @@ check_store_cli() {
          for f in d.get('findings',[]) if f['severity'] in ('error','warning')]" \
       2>/dev/null || true
   fi
+}
+
+check_daemon() {
+  section "Drain daemon"
+
+  if ! command -v token-tally &>/dev/null; then
+    warn "token-tally not in PATH — cannot check daemon status"
+    return
+  fi
+
+  local status_json status_fields
+  status_json=$(token-tally daemon --status 2>/dev/null) || status_json=""
+  if [[ -z "${status_json}" ]]; then
+    warn "Daemon state unavailable — run 'token-tally daemon --status' for details"
+  else
+    status_fields=$(TT_DAEMON_STATUS="${status_json}" python3 - <<'PY'
+import json
+import os
+
+try:
+    data = json.loads(os.environ["TT_DAEMON_STATUS"])
+    daemon = data.get("daemon", {})
+    errors = data.get("errors", {})
+    print(f"OK:{daemon.get('pid','')}:{daemon.get('passCount','')}:{errors.get('dbStatus','unknown')}")
+except Exception as exc:
+    print(f"ERROR:{exc}")
+PY
+) || status_fields="ERROR:could not parse daemon status"
+
+    case "${status_fields}" in
+      OK:*)
+        local fields pid pass_count db_status
+        fields="${status_fields#OK:}"
+        pid="${fields%%:*}"
+        fields="${fields#*:}"
+        pass_count="${fields%%:*}"
+        db_status="${fields#*:}"
+
+        if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+          pass "Daemon state live (pid=${pid}, passCount=${pass_count})"
+        else
+          warn "Daemon state file exists but pid ${pid:-unknown} is not running"
+        fi
+
+        if [[ "${db_status}" == "ok" ]]; then
+          pass "Daemon database status: ok"
+        else
+          warn "Daemon database status: ${db_status}"
+        fi
+        ;;
+      ERROR:*) warn "Daemon status parse failed: ${status_fields#ERROR:}" ;;
+      *) warn "Unexpected daemon status output: ${status_fields}" ;;
+    esac
+  fi
+
+  case "$(uname -s)" in
+    Darwin)
+      local plist_path="${HOME}/Library/LaunchAgents/com.token-tally.daemon.plist"
+      if [[ -f "${plist_path}" ]]; then
+        pass "launchd plist present at ${plist_path}"
+      else
+        warn "launchd plist missing at ${plist_path}"
+      fi
+
+      if launchctl print "gui/$(id -u)/com.token-tally.daemon" >/dev/null 2>&1; then
+        pass "launchd job loaded"
+      else
+        warn "launchd job is not loaded — run 'make install' or scripts/install-daemon.sh"
+      fi
+      ;;
+    Linux)
+      local unit_path="${HOME}/.config/systemd/user/token-tally-daemon.service"
+      if [[ -f "${unit_path}" ]]; then
+        pass "systemd user unit present at ${unit_path}"
+      else
+        warn "systemd user unit missing at ${unit_path}"
+      fi
+
+      if command -v systemctl &>/dev/null && systemctl --user is-active --quiet token-tally-daemon; then
+        pass "systemd user service active"
+      else
+        warn "systemd user service is not active — run 'systemctl --user start token-tally-daemon'"
+      fi
+      ;;
+    *)
+      info "Unsupported platform for automatic daemon registration checks"
+      ;;
+  esac
 }
 
 check_tray() {
@@ -423,6 +512,7 @@ main() {
   echo "  Repo: ${REPO_ROOT}"
 
   check_store_cli
+  check_daemon
   check_tray
   check_pi_extensions
   check_claude_code
