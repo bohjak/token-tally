@@ -36,6 +36,7 @@ function makeState(overrides: Partial<SessionState> = {}): SessionState {
     turnIndex: 0,
     currentTurnId: null,
     currentHarnessTurnId: null,
+    transcriptPath: null,
     transcriptOffset: 0,
     lastModelId: null,
     lastProvider: null,

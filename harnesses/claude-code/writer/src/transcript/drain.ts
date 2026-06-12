@@ -15,7 +15,6 @@ import type { AnalyticsWriter } from "@token-tally/store";
 import { readTranscriptFrom } from "./reader.js";
 import { extractAssistantUsage } from "./extract.js";
 import { computeCostMicros } from "../pricing/compute.js";
-import { centralUuid } from "../ids/synthesize.js";
 import type { SessionState } from "../state/session-state.js";
 
 // ---------------------------------------------------------------------------
@@ -44,10 +43,24 @@ export async function drainTranscript(
   // Shallow-copy state so callers see a new object, not silent mutation.
   const updated: SessionState = { ...state, activeTools: { ...state.activeTools } };
 
-  const { entries, nextLine } = await readTranscriptFrom(
+  // M6: reset the offset whenever the transcript path has changed (e.g. a
+  // subagent that writes to a different file, or a session resume with a new
+  // transcript). The incoming path becomes the new anchor.
+  if (updated.transcriptPath !== transcriptPath) {
+    updated.transcriptOffset = 0;
+    updated.transcriptPath = transcriptPath;
+  }
+
+  const { entries, nextLine, wasReset } = await readTranscriptFrom(
     transcriptPath,
     updated.transcriptOffset,
   );
+
+  // M1: Only attribute entries to the current turn when we are doing a genuine
+  // incremental read (wasReset=false). On a rotation-reset rescan the returned
+  // entries already exist in the store; with the store COALESCE guard on
+  // turn_id, passing undefined preserves their existing turn attribution.
+  const effectiveTurnId = wasReset ? null : updated.currentTurnId;
 
   for (const entry of entries) {
     const usage = extractAssistantUsage(entry);
@@ -89,7 +102,9 @@ export async function drainTranscript(
     // ── Store write ───────────────────────────────────────────────────────
     await writer.recordLlmMessage({
       sessionId: updated.centralSessionId,
-      turnId: updated.currentTurnId ?? undefined,
+      // M1: use effectiveTurnId so rotation-rescanned historical entries do
+      // not get their turn attribution overwritten by the current turn.
+      turnId: effectiveTurnId ?? undefined,
       harnessId: "claude-code",
       harnessMessageId: usage.harnessMessageId,
       ts: usage.ts,
@@ -105,7 +120,11 @@ export async function drainTranscript(
       costCacheWriteMicros,
       costCurrency: "USD",
       costSource,
-      subscriptionId: updated.subscriptionId ?? undefined,
+      // m2: subscriptionId is only valid when this row is actually covered;
+      // do not set it for 'harness' or 'unknown' rows.
+      subscriptionId: costSource === "subscription_covered"
+        ? (updated.subscriptionId ?? undefined)
+        : undefined,
     });
 
     // ── Update running state ──────────────────────────────────────────────

@@ -75,6 +75,37 @@ describe("lookupModelRates", () => {
     assert.ok(rates !== null, "strip-segment fallback should find sonnet-20241022");
     assert.deepEqual(rates, expected);
   });
+
+  // C2 regression tests: unknown claude-* models must NOT match via bare stem
+  it("C2: unknown claude-* model returns null (not the first table entry)", () => {
+    // Without the dash guard, "claude-supernova-9" strips to "claude" which
+    // prefix-matches "claude-opus-4-5" — the most expensive model.
+    const rates = lookupModelRates("claude-supernova-9");
+    assert.equal(rates, null, "unknown claude-* model should return null, not opus rates");
+  });
+
+  it("C2: claude-haiku-4-5 is priced correctly", () => {
+    const rates = lookupModelRates("claude-haiku-4-5");
+    assert.ok(rates !== null, "claude-haiku-4-5 should be in the pricing table");
+    assert.equal(rates.inputPerMTokUSD, 0.8);
+    assert.equal(rates.outputPerMTokUSD, 4);
+    assert.equal(rates.cacheReadPerMTokUSD, 0.08);
+    assert.equal(rates.cacheWritePerMTokUSD, 1);
+  });
+
+  it("C2: claude-haiku-4 alias resolves to claude-haiku-4-5 rates (prefix match)", () => {
+    // "claude-haiku-4" is a prefix of "claude-haiku-4-5"
+    const rates = lookupModelRates("claude-haiku-4");
+    const expected = MODEL_RATES["claude-haiku-4-5"];
+    assert.ok(rates !== null, "claude-haiku-4 should resolve via prefix match");
+    assert.deepEqual(rates, expected);
+  });
+
+  it("C2: bare stem 'claude' alone returns null", () => {
+    // Belt-and-suspenders: bare provider name must never match a table entry.
+    const rates = lookupModelRates("claude");
+    assert.equal(rates, null, "bare 'claude' stem must return null");
+  });
 });
 
 // ---------------------------------------------------------------------------

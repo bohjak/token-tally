@@ -14,6 +14,7 @@ import {
   type SessionState,
 } from "../state/session-state.js";
 import { synthesizeTurnId, centralUuid } from "../ids/synthesize.js";
+import { INTEGRATION_VERSION } from "../version.js";
 
 // ---------------------------------------------------------------------------
 // Handler
@@ -44,6 +45,15 @@ export async function handle(
       "— synthesising minimal state (extension may have been installed mid-session)",
     );
 
+    // Register the harness first so the FK constraint on sessions.harness_id
+    // passes. Without this, recordSession fails on a fresh/purged DB.
+    await writer.recordHarness({
+      name: "claude-code",
+      displayName: "Claude Code",
+      version: process.env["CLAUDE_CODE_VERSION"] ?? "unknown",
+      integrationVersion: INTEGRATION_VERSION,
+    });
+
     const sessionResult = await writer.recordSession({
       harnessId: "claude-code",
       harnessSessionId: payload.session_id,
@@ -57,6 +67,7 @@ export async function handle(
       turnIndex: 0,
       currentTurnId: null,
       currentHarnessTurnId: null,
+      transcriptPath: null,
       transcriptOffset: 0,
       lastModelId: null,
       lastProvider: null,

@@ -41,6 +41,14 @@ export interface SessionState {
   currentHarnessTurnId: string | null;
 
   /**
+   * Absolute path to the transcript file this offset is indexed against.
+   * When the incoming transcript_path differs from this value, drain.ts resets
+   * the offset to 0 so the new file is read from the beginning.
+   * Null on initial state (no drain has occurred yet).
+   */
+  transcriptPath: string | null;
+
+  /**
    * Number of lines consumed from the transcript JSONL so far.
    * Used as the `fromLine` argument to `readTranscriptFrom` to avoid
    * re-processing entries already recorded.

@@ -48,6 +48,14 @@ export const MODEL_RATES: Record<string, ModelRates> = {
     cacheWritePerMTokUSD: 3.75,
   },
 
+  // Claude 4 Haiku
+  "claude-haiku-4-5": {
+    inputPerMTokUSD: 0.8,
+    outputPerMTokUSD: 4,
+    cacheReadPerMTokUSD: 0.08,
+    cacheWritePerMTokUSD: 1,
+  },
+
   // Claude 3.5 family
   "claude-3-5-sonnet-20241022": {
     inputPerMTokUSD: 3,
@@ -122,9 +130,14 @@ export function lookupModelRates(modelId: string | null): ModelRates | null {
     }
 
     // Step 2: prefix match — supplied candidate is a prefix of a table key.
-    const prefixHit = tableKeys.find((k) => k.startsWith(candidate + "-"));
-    if (prefixHit !== undefined) {
-      return MODEL_RATES[prefixHit]!;
+    // Guard: only attempt prefix matching when the candidate contains at least
+    // one dash, so bare provider stems like "claude" or "gpt" can never match
+    // the first table entry and silently assign the wrong rates.
+    if (candidate.includes("-")) {
+      const prefixHit = tableKeys.find((k) => k.startsWith(candidate + "-"));
+      if (prefixHit !== undefined) {
+        return MODEL_RATES[prefixHit]!;
+      }
     }
 
     // Step 3: strip the last dash-segment and retry.

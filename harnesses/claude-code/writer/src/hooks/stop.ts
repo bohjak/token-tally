@@ -56,10 +56,11 @@ export async function handle(
       sessionId: state.centralSessionId,
       harnessId: "claude-code",
       harnessTurnId: state.currentHarnessTurnId,
-      // startedAt is required by TurnPayload; we do not know the original
-      // value here, but the upsert will only update endedAt (and other
-      // supplied fields) — startedAt was set correctly by UserPromptSubmit.
-      startedAt: now,
+      // Pass startedAt: 0 as the sentinel value. The store upsert uses
+      // COALESCE(NULLIF(excluded.started_at, 0), turns.started_at) so the
+      // value 0 is treated as "preserve the existing started_at" — the real
+      // start time was recorded by UserPromptSubmit and must not be overwritten.
+      startedAt: 0,
       endedAt: now,
     });
     state.currentTurnId = null;

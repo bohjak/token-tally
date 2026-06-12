@@ -30,6 +30,14 @@ models:
     cacheReadPerMTokUSD: 0.3
     cacheWritePerMTokUSD: 3.75
 
+  - id: claude-haiku-4-5
+    aliases:
+      - claude-haiku-4
+    inputPerMTokUSD: 0.8
+    outputPerMTokUSD: 4
+    cacheReadPerMTokUSD: 0.08
+    cacheWritePerMTokUSD: 1
+
   - id: claude-3-5-sonnet-20241022
     aliases:
       - claude-3-5-sonnet

@@ -54,6 +54,7 @@ function makeState(overrides: Partial<SessionState> = {}): SessionState {
     turnIndex: 1,
     currentTurnId: "turn-id-1",
     currentHarnessTurnId: "harness-session-1:t1",
+    transcriptPath: null,
     transcriptOffset: 0,
     lastModelId: null,
     lastProvider: null,
@@ -243,7 +244,35 @@ test("subscription covered: legacy harness cost is NOT reclassified", async () =
     assert.equal(calls.length, 1);
     // "harness" cost source: the override only applies to "writer" source.
     assert.equal(calls[0]!.costSource, "harness");
-    assert.equal(calls[0]!.subscriptionId, "sub-xyz");
+    // m2 fix: subscriptionId must NOT be set on non-covered rows.
+    assert.equal(
+      calls[0]!.subscriptionId,
+      undefined,
+      "subscriptionId should be undefined for harness-cost rows",
+    );
+  } finally {
+    await unlink(path).catch(() => undefined);
+  }
+});
+
+test("m2: unknown-cost rows do not get subscriptionId even when session has one", async () => {
+  // An unknown model produces costSource='unknown'; subscriptionId must be
+  // undefined to avoid readers treating the row as 'free' subscription usage.
+  const entry = assistantEntry("msg-unknown-sub", "claude-supernova-99", 500, 250);
+  const path = await writeTmpTranscript([toLine(entry)]);
+
+  try {
+    const { writer, calls } = makeFakeWriter();
+    const state = makeState({ subscriptionId: "sub-abc" });
+    await drainTranscript(writer, state, path);
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]!.costSource, "unknown", "unknown model should give unknown costSource");
+    assert.equal(
+      calls[0]!.subscriptionId,
+      undefined,
+      "subscriptionId must not be set on unknown-cost rows",
+    );
   } finally {
     await unlink(path).catch(() => undefined);
   }
@@ -279,11 +308,12 @@ test("unknown model: costSource is unknown and all cost micros are 0", async () 
 // ---------------------------------------------------------------------------
 // Test 5 — Incremental reading: drain only processes new lines
 //
-// The reader resets offset when fromLine >= totalLines (handles transcript
-// rotation). Idempotency for already-recorded entries is the store's job via
-// ON CONFLICT DO UPDATE on (harness_id, harness_message_id). This test verifies
-// that when the transcript GROWS between drain calls, only the NEW entries are
-// processed by the second call — the core incremental-reading guarantee.
+// The reader resets offset only when fromLine > totalLines (transcript
+// rotation/truncation). Idempotency for already-recorded entries is the
+// store's job via ON CONFLICT DO UPDATE on (harness_id, harness_message_id).
+// This test verifies that when the transcript GROWS between drain calls, only
+// the NEW entries are processed by the second call — the core incremental
+// guarantee. A companion test covers the trailing-newline case (C1 fix).
 // ---------------------------------------------------------------------------
 
 test("incremental reading: second drain only processes new transcript entries", async () => {
@@ -358,8 +388,8 @@ test("empty transcript: no recordLlmMessage calls, lastModelId unchanged", async
 
     assert.equal(calls.length, 0, "empty transcript should produce no calls");
     // The reader returns nextLine = totalLines even for empty content.
-    // An empty string split by '\n' yields [""] (length 1), so offset
-    // advances to 1. What matters is no entries were recorded.
+    // An empty string split by '\n' yields [""], the trailing-empty strip
+    // then pops it → totalLines=0 → offset=0. What matters is no entries.
     assert.ok(updated.transcriptOffset >= 0, "offset should be non-negative");
     assert.equal(updated.lastModelId, null, "lastModelId unchanged when no entries");
   } finally {
@@ -426,5 +456,65 @@ test("null currentTurnId is passed as undefined to recordLlmMessage", async () =
     );
   } finally {
     await unlink(path).catch(() => undefined);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// C1 regression (drain): trailing-newline incremental growth doesn't skip
+// ---------------------------------------------------------------------------
+
+test("C1 regression: trailing-newline file growth doesn't skip first new entry", async () => {
+  const entry1 = assistantEntry("msg-tnl-1", "claude-3-5-haiku-20241022", 10, 5);
+  const entry2 = assistantEntry("msg-tnl-2", "claude-3-5-haiku-20241022", 20, 10);
+  const path = join(tmpdir(), `drain-trailing-newline-${randomUUID()}.jsonl`);
+
+  try {
+    // Write entry1 WITH a trailing newline (real-world Claude Code transcript format).
+    await writeFile(path, toLine(entry1) + "\n", "utf8");
+
+    const { writer, calls } = makeFakeWriter();
+    const state0 = makeState();
+
+    const state1 = await drainTranscript(writer, state0, path);
+    assert.equal(calls.length, 1, "first drain should read msg-tnl-1");
+    assert.equal(calls[0]!.harnessMessageId, "msg-tnl-1");
+    // With the C1 fix, offset should be 1 (real line count), not 2 (phantom).
+    assert.equal(state1.transcriptOffset, 1, "offset should be 1 after first trailing-newline drain");
+
+    // Grow transcript: append entry2 with trailing newline.
+    await writeFile(path, toLine(entry1) + "\n" + toLine(entry2) + "\n", "utf8");
+
+    const state2 = await drainTranscript(writer, state1, path);
+    assert.equal(calls.length, 2, "second drain must capture msg-tnl-2, not skip it");
+    assert.equal(calls[1]!.harnessMessageId, "msg-tnl-2", "second entry must be msg-tnl-2");
+    assert.equal(state2.transcriptOffset, 2);
+  } finally {
+    await unlink(path).catch(() => undefined);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// M6: transcript path binding — offset resets when path changes
+// ---------------------------------------------------------------------------
+
+test("M6: offset resets to 0 when transcriptPath changes", async () => {
+  const entry = assistantEntry("msg-path-1", "claude-3-5-haiku-20241022", 10, 5);
+  const path1 = await writeTmpTranscript([toLine(entry)]);
+  const entry2 = assistantEntry("msg-path-2", "claude-3-5-haiku-20241022", 20, 10);
+  const path2 = await writeTmpTranscript([toLine(entry2)]);
+
+  try {
+    const { writer, calls } = makeFakeWriter();
+    // State has an advanced offset from a previous path.
+    const state = makeState({ transcriptPath: path1, transcriptOffset: 999 });
+
+    // Drain with a DIFFERENT path — offset should reset to 0 and read from start.
+    const updated = await drainTranscript(writer, state, path2);
+    assert.equal(calls.length, 1, "new path should read from beginning");
+    assert.equal(calls[0]!.harnessMessageId, "msg-path-2");
+    assert.equal(updated.transcriptPath, path2, "transcriptPath should update to new path");
+  } finally {
+    await unlink(path1).catch(() => undefined);
+    await unlink(path2).catch(() => undefined);
   }
 });

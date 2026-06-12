@@ -146,9 +146,14 @@ export function lookupRates(modelId: string): ModelRates | undefined {
     if (byAlias !== undefined) return byAlias;
 
     // Step 3: prefix match — candidate is a prefix of a canonical id.
-    const prefix = candidate + "-";
-    const prefixHit = allIds.find((id) => id.startsWith(prefix));
-    if (prefixHit !== undefined) return exactById.get(prefixHit);
+    // Guard: only attempt prefix matching when the candidate contains at least
+    // one dash, so bare provider stems like "claude" or "gpt" can never match
+    // the alphabetically-first table entry and assign the wrong rates.
+    if (candidate.includes("-")) {
+      const prefix = candidate + "-";
+      const prefixHit = allIds.find((id) => id.startsWith(prefix));
+      if (prefixHit !== undefined) return exactById.get(prefixHit);
+    }
 
     // Step 4: strip the last dash-segment and retry.
     const lastDash = candidate.lastIndexOf("-");

@@ -80,6 +80,7 @@ export async function handle(
     turnIndex: 0,
     currentTurnId: null,
     currentHarnessTurnId: null,
+    transcriptPath: null,
     transcriptOffset: 0,
     lastModelId: null,
     lastProvider: null,
