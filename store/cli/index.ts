@@ -19,7 +19,7 @@ import { basename, dirname, join } from "path";
 import { pathToFileURL } from "url";
 import { cmdImportLegacyPi } from "./import-legacy-pi";
 import { cmdImportPiSessions } from "./import-pi-sessions";
-import { formatDoctorReport, runDoctor } from "../src/doctor";
+import { formatDoctorRepairReport, formatDoctorReport, repairDoctorFindings, runDoctor } from "../src/doctor";
 import { ingestDir, ingestFile } from "../src/ingest";
 import type { IngestOptions } from "../src/ingest";
 import { defaultConfigDir, defaultDatabasePath, defaultSpoolDir, defaultStateDir } from "../src/paths";
@@ -244,13 +244,23 @@ export async function main(argv: string[]): Promise<number> {
       "doctor",
       "Run diagnostic checks and report database health.",
       (y) =>
-        y.option("json", {
-          type: "boolean",
-          describe:
-            "Output machine-readable JSON. Exits non-zero when errors are found.",
-        }),
+        y
+          .option("json", {
+            type: "boolean",
+            describe:
+              "Output machine-readable JSON. Exits non-zero when errors are found.",
+          })
+          .option("repair", {
+            type: "boolean",
+            describe:
+              "Preview safe repairs for duplicate records and stale sessions. Dry-run unless --yes is also passed.",
+          })
+          .option("yes", {
+            type: "boolean",
+            describe: "Apply --repair changes. Without this flag, repair is a dry-run.",
+          }),
       async (args) => {
-        exitCode = await cmdDoctor(args.json === true, args.db);
+        exitCode = await cmdDoctor(args.json === true, args.db, args.repair === true, args.yes === true);
       },
     )
 
@@ -938,8 +948,21 @@ async function cmdIngestDir(
 async function cmdDoctor(
   jsonMode: boolean,
   dbPathOverride: string | undefined,
+  repairMode: boolean,
+  applyRepair: boolean,
 ): Promise<number> {
   const dbPath = dbPathOverride ?? defaultDatabasePath();
+
+  if (repairMode) {
+    const report = repairDoctorFindings(dbPath, applyRepair);
+    if (jsonMode) {
+      process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+    } else {
+      process.stdout.write(formatDoctorRepairReport(report) + "\n");
+    }
+    return report.status === "ok" ? 0 : 1;
+  }
+
   const report = runDoctor(dbPath);
 
   if (jsonMode) {

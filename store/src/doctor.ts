@@ -53,6 +53,24 @@ export type DoctorReport = {
   status: "ok" | "error";
 };
 
+/** A repair action that can be previewed or applied. */
+export type RepairAction = {
+  code: string;
+  message: string;
+  affectedRows: number;
+};
+
+/** Output from repairDoctorFindings. */
+export type DoctorRepairReport = {
+  dbPath: string;
+  generatedAt: number;
+  /** true when changes were written; false means dry-run only. */
+  applied: boolean;
+  actions: RepairAction[];
+  status: "ok" | "error";
+  error?: string;
+};
+
 // ---------------------------------------------------------------------------
 // Sensitive key patterns flagged in raw_events payloads
 // ---------------------------------------------------------------------------
@@ -144,6 +162,72 @@ export function runDoctor(dbPath: string): DoctorReport {
 
   const status = findings.some((f) => f.severity === "error") ? "error" : "ok";
   return { dbPath, generatedAt, findings, status };
+}
+
+/**
+ * Repairs doctor findings that are safe to fix mechanically.
+ *
+ * Dry-run mode computes the exact rows that would be touched without writing.
+ * Apply mode runs all changes in one transaction so a failure leaves the DB as
+ * it was before repair started.
+ */
+export function repairDoctorFindings(dbPath: string, apply: boolean): DoctorRepairReport {
+  const generatedAt = Date.now();
+  const actions: RepairAction[] = [];
+
+  const fileCheck = checkDbFile(dbPath);
+  if (fileCheck.severity === "error") {
+    return {
+      dbPath,
+      generatedAt,
+      applied: false,
+      actions,
+      status: "error",
+      error: fileCheck.message,
+    };
+  }
+
+  let db: Database.Database;
+  try {
+    db = new Database(dbPath);
+    db.pragma("foreign_keys = ON");
+  } catch (err) {
+    return {
+      dbPath,
+      generatedAt,
+      applied: false,
+      actions,
+      status: "error",
+      error: `Cannot open database: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  try {
+    if (apply) {
+      db.transaction(() => {
+        actions.push(repairDuplicateLlmMessages(db, true));
+        actions.push(repairDuplicateToolCalls(db, true));
+        actions.push(repairStaleSessions(db, generatedAt, true));
+      })();
+    } else {
+      actions.push(repairDuplicateLlmMessages(db, false));
+      actions.push(repairDuplicateToolCalls(db, false));
+      actions.push(repairStaleSessions(db, generatedAt, false));
+    }
+  } catch (err) {
+    return {
+      dbPath,
+      generatedAt,
+      applied: false,
+      actions,
+      status: "error",
+      error: `Repair failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  } finally {
+    db.close();
+  }
+
+  return { dbPath, generatedAt, applied: apply, actions, status: "ok" };
 }
 
 // ---------------------------------------------------------------------------
@@ -603,6 +687,186 @@ function checkRawEventsSensitiveKeys(db: Database.Database): Finding[] {
 }
 
 // ---------------------------------------------------------------------------
+// Repair helpers
+// ---------------------------------------------------------------------------
+
+const DUPLICATE_LLM_MESSAGE_ROWIDS_SQL = `
+  WITH ranked AS (
+    SELECT
+      m.rowid AS rowid,
+      ROW_NUMBER() OVER (
+        PARTITION BY
+          m.harness_id,
+          m.ts,
+          COALESCE(m.provider, ''),
+          COALESCE(m.model_id, ''),
+          m.input_tokens,
+          m.output_tokens,
+          m.cache_read_tokens,
+          m.cache_write_tokens,
+          m.cost_total_micros,
+          COALESCE(s.cwd, '')
+        ORDER BY m.rowid
+      ) AS duplicate_rank
+    FROM llm_messages m
+    JOIN sessions s ON s.id = m.session_id
+  )
+  SELECT rowid FROM ranked WHERE duplicate_rank > 1
+`;
+
+const DUPLICATE_TOOL_CALL_ROWIDS_SQL = `
+  WITH ranked AS (
+    SELECT
+      t.rowid AS rowid,
+      ROW_NUMBER() OVER (
+        PARTITION BY
+          t.harness_id,
+          t.started_at,
+          COALESCE(t.ended_at, -1),
+          t.tool_name,
+          t.is_error,
+          COALESCE(s.cwd, '')
+        ORDER BY t.rowid
+      ) AS duplicate_rank
+    FROM tool_calls t
+    JOIN sessions s ON s.id = t.session_id
+  )
+  SELECT rowid FROM ranked WHERE duplicate_rank > 1
+`;
+
+function repairDuplicateLlmMessages(db: Database.Database, apply: boolean): RepairAction {
+  if (!tableExists(db, "llm_messages") || !tableExists(db, "sessions")) {
+    return {
+      code: "repair_duplicate_llm_messages_skipped",
+      affectedRows: 0,
+      message: "Skipped duplicate LLM message repair because required tables are missing.",
+    };
+  }
+
+  const countRow = db
+    .prepare(`SELECT COUNT(*) AS n FROM (${DUPLICATE_LLM_MESSAGE_ROWIDS_SQL})`)
+    .get() as { n: number };
+
+  if (apply && countRow.n > 0) {
+    db.prepare(
+      `DELETE FROM llm_messages
+       WHERE rowid IN (${DUPLICATE_LLM_MESSAGE_ROWIDS_SQL})`
+    ).run();
+  }
+
+  return {
+    code: "repair_duplicate_llm_messages",
+    affectedRows: countRow.n,
+    message: `${apply ? "Deleted" : "Would delete"} ${countRow.n} duplicate LLM message row(s).`,
+  };
+}
+
+function repairDuplicateToolCalls(db: Database.Database, apply: boolean): RepairAction {
+  if (!tableExists(db, "tool_calls") || !tableExists(db, "sessions")) {
+    return {
+      code: "repair_duplicate_tool_calls_skipped",
+      affectedRows: 0,
+      message: "Skipped duplicate tool-call repair because required tables are missing.",
+    };
+  }
+
+  const countRow = db
+    .prepare(`SELECT COUNT(*) AS n FROM (${DUPLICATE_TOOL_CALL_ROWIDS_SQL})`)
+    .get() as { n: number };
+
+  if (apply && countRow.n > 0) {
+    db.prepare(
+      `DELETE FROM tool_calls
+       WHERE rowid IN (${DUPLICATE_TOOL_CALL_ROWIDS_SQL})`
+    ).run();
+  }
+
+  return {
+    code: "repair_duplicate_tool_calls",
+    affectedRows: countRow.n,
+    message: `${apply ? "Deleted" : "Would delete"} ${countRow.n} duplicate tool-call row(s).`,
+  };
+}
+
+function repairStaleSessions(
+  db: Database.Database,
+  nowMs: number,
+  apply: boolean,
+): RepairAction {
+  if (!tableExists(db, "sessions")) {
+    return {
+      code: "repair_stale_sessions_skipped",
+      affectedRows: 0,
+      message: "Skipped stale session repair because the sessions table is missing.",
+    };
+  }
+
+  const thresholdMs = nowMs - STALE_SESSION_THRESHOLD_MS;
+  const countRow = db
+    .prepare(
+      `SELECT COUNT(*) AS n
+       FROM sessions
+       WHERE ended_at IS NULL AND started_at < ?`
+    )
+    .get(thresholdMs) as { n: number };
+
+  if (apply && countRow.n > 0) {
+    db.prepare(
+      `UPDATE sessions
+       SET ended_at = MAX(
+         started_at,
+         COALESCE((
+           SELECT MAX(ts)
+           FROM llm_messages
+           WHERE llm_messages.session_id = sessions.id
+         ), started_at),
+         COALESCE((
+           SELECT MAX(COALESCE(ended_at, started_at))
+           FROM tool_calls
+           WHERE tool_calls.session_id = sessions.id
+         ), started_at),
+         COALESCE((
+           SELECT MAX(COALESCE(ended_at, started_at))
+           FROM turns
+           WHERE turns.session_id = sessions.id
+         ), started_at)
+       )
+       WHERE ended_at IS NULL AND started_at < ?`
+    ).run(thresholdMs);
+  }
+
+  return {
+    code: "repair_stale_sessions",
+    affectedRows: countRow.n,
+    message: `${apply ? "Closed" : "Would close"} ${countRow.n} stale open session(s).`,
+  };
+}
+
+/** Formats repair output for terminal display. */
+export function formatDoctorRepairReport(report: DoctorRepairReport): string {
+  const lines: string[] = [];
+  const mode = report.applied ? "apply" : "dry-run";
+  lines.push(`ToTally doctor repair — ${report.dbPath} (${mode})`);
+  lines.push("");
+
+  if (report.error != null) {
+    lines.push(`${RED}✗${RESET} ${report.error}`);
+    return lines.join("\n");
+  }
+
+  for (const action of report.actions) {
+    lines.push(`  ${GREEN}✓${RESET}  ${action.message}`);
+  }
+
+  if (!report.applied) {
+    lines.push("");
+    lines.push("Dry run only. Re-run with --yes to apply these repairs.");
+  }
+
+  return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
 // Formatting helpers (used by the CLI)
 // ---------------------------------------------------------------------------
 
@@ -636,12 +900,24 @@ export function formatDoctorReport(report: DoctorReport): string {
     lines.push(`  ${prefix}  ${finding.message}`);
   }
 
+  const hasRepairableFindings = report.findings.some((f) =>
+    f.code === "duplicate_llm_messages" ||
+    f.code === "duplicate_tool_calls" ||
+    f.code === "stale_sessions"
+  );
+
   lines.push("");
   if (report.status === "ok") {
     lines.push(`${GREEN}All checks passed.${RESET}`);
   } else {
     const errorCount = report.findings.filter((f) => f.severity === "error").length;
     lines.push(`${RED}${errorCount} error(s) found. See above for details.${RESET}`);
+  }
+
+  if (hasRepairableFindings) {
+    lines.push("");
+    lines.push("Repairable warnings found. Preview fixes with: token-tally doctor --repair");
+    lines.push("Apply fixes with: token-tally doctor --repair --yes");
   }
 
   return lines.join("\n");

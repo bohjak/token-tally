@@ -7,15 +7,32 @@ SHELL := /bin/bash
 # per-component logic auditable in its own script.
 #
 # Usage:
-#   make install    — idempotent install / update after `git pull`
-#   make uninstall  — remove installed components (user data kept by default)
-#   make doctor     — diagnostic check of all components
-#   make test       — run all tests
+#   make install      — idempotent install / update after `git pull`
+#   make install cli  — install / update only the token-tally CLI and database
+#   make install-cli  — same as `make install cli`
+#   make uninstall    — remove installed components (user data kept by default)
+#   make doctor       — diagnostic check of all components
+#   make test         — run all tests
 
-.PHONY: install uninstall doctor test
+TOKEN_TALLY_DATA_DIR := $(if $(XDG_DATA_HOME),$(XDG_DATA_HOME),$(HOME)/.local/share)/token-tally
+
+.PHONY: install cli install-cli uninstall doctor test
 
 install:
+ifeq ($(filter cli,$(MAKECMDGOALS)),cli)
+	@scripts/install-store.sh "$(CURDIR)" "$(TOKEN_TALLY_DATA_DIR)"
+else
 	@scripts/install.sh
+endif
+
+cli:
+ifeq ($(filter install,$(MAKECMDGOALS)),install)
+	@:
+else
+	@scripts/install-store.sh "$(CURDIR)" "$(TOKEN_TALLY_DATA_DIR)"
+endif
+
+install-cli: cli
 
 uninstall:
 	@scripts/uninstall.sh

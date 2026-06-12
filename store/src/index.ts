@@ -26,8 +26,8 @@ export { SpoolWriter, drainClosedSpoolFiles, drainSingleSpoolFile, promoteStaleA
 export type { SpoolRecord, DrainResult, BoundedDrainOptions, PromoteResult, PromotedEntry } from "./spool";
 
 // T6 — doctor, ingest
-export { runDoctor, formatDoctorReport } from "./doctor";
-export type { DoctorReport, Finding, FindingSeverity } from "./doctor";
+export { runDoctor, formatDoctorReport, repairDoctorFindings, formatDoctorRepairReport } from "./doctor";
+export type { DoctorReport, DoctorRepairReport, Finding, FindingSeverity, RepairAction } from "./doctor";
 export { ingestFile, ingestDir } from "./ingest";
 export type { IngestOptions, IngestResult } from "./ingest";
 
