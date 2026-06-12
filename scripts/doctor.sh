@@ -181,6 +181,20 @@ PY
     esac
   fi
 
+  # Warn when the daemon log has grown beyond the rotation threshold (10 MiB).
+  # The daemon rotates it at startup, but a long-running daemon may not have
+  # restarted recently.
+  local daemon_log="${TOKEN_TALLY_STATE_DIR}/logs/daemon.log"
+  if [[ -f "${daemon_log}" ]]; then
+    local log_size_bytes
+    log_size_bytes=$(wc -c < "${daemon_log}" 2>/dev/null | tr -d ' ') || log_size_bytes=0
+    local log_max_bytes=$(( 10 * 1024 * 1024 ))
+    if (( log_size_bytes > log_max_bytes )); then
+      warn "Daemon log is large ($(( log_size_bytes / 1024 / 1024 )) MiB): ${daemon_log}"
+      warn "  Restart the daemon to trigger log rotation (daemon rotates on startup)."
+    fi
+  fi
+
   case "$(uname -s)" in
     Darwin)
       local plist_path="${HOME}/Library/LaunchAgents/com.token-tally.daemon.plist"
@@ -358,7 +372,11 @@ for event in events:
                 if not isinstance(hook, dict):
                     continue
                 command = hook.get("command")
-                if isinstance(command, str) and command.startswith("token-tally-claude-hook"):
+                # Match old bare-name installs and new absolute-path installs.
+                if isinstance(command, str) and (
+                    command.startswith("token-tally-claude-hook") or
+                    command.endswith("/token-tally-claude-hook")
+                ):
                     found = True
     if not found:
         missing.append(event)

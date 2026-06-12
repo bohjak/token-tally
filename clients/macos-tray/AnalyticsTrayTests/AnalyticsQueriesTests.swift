@@ -1044,6 +1044,64 @@ struct AnalyticsQueriesFixtureTests {
     }
 }
 
+// MARK: -
+
+@Suite("AnalyticsQueries — degraded schema flag")
+struct DegradedSchemaFlagTests {
+
+    // schema_version = 1 (MAX_KNOWN) → not degraded
+    @Test func normalSchemaSnapshotIsNotDegraded() throws {
+        let db = try CentralFixture(schemaVersion: "1")
+        let snapshot = try AnalyticsQueries.loadSnapshot(
+            databasePath: db.path,
+            now: Date(timeIntervalSince1970: 1_704_153_600),
+            calendar: utcCalendar()
+        )
+        #expect(snapshot.schemaIsDegraded == false)
+    }
+
+    // schema_version = 2 (MAX_KNOWN+1, within forward window) → degraded
+    @Test func degradedSchemaSnapshotIsFlagged() throws {
+        let db = try CentralFixture(schemaVersion: "2")
+        let snapshot = try AnalyticsQueries.loadSnapshot(
+            databasePath: db.path,
+            now: Date(timeIntervalSince1970: 1_704_153_600),
+            calendar: utcCalendar()
+        )
+        // The tray must still load the snapshot without throwing — degraded
+        // mode means reads succeed on known columns, not that the DB is broken.
+        #expect(snapshot.schemaIsDegraded == true)
+    }
+
+    // schema_version = 3 (MAX_KNOWN+WINDOW, last tolerated version) → degraded
+    @Test func degradedSchemaAtWindowEdgeIsFlagged() throws {
+        let db = try CentralFixture(schemaVersion: "3")
+        let snapshot = try AnalyticsQueries.loadSnapshot(
+            databasePath: db.path,
+            now: Date(timeIntervalSince1970: 1_704_153_600),
+            calendar: utcCalendar()
+        )
+        #expect(snapshot.schemaIsDegraded == true)
+    }
+
+    // schema_version = 4 (beyond MAX_KNOWN+WINDOW) → loadSnapshot must throw,
+    // not return a degraded snapshot. This guards against the flag being set
+    // incorrectly on too-new databases that validateAnalyticsSchema rejects.
+    @Test func tooNewSchemaDoesNotProduceSnapshot() throws {
+        let db = try CentralFixture(schemaVersion: "4")
+        do {
+            _ = try AnalyticsQueries.loadSnapshot(
+                databasePath: db.path,
+                now: Date(timeIntervalSince1970: 1_704_153_600),
+                calendar: utcCalendar()
+            )
+            Issue.record("Expected schemaMismatch for version 4")
+        } catch let e as SQLiteError {
+            #expect(e.isSchemaMismatch)
+        }
+    }
+}
+
 // MARK: - Shared helpers
 
 /// Central-schema fixture database.

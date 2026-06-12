@@ -109,7 +109,7 @@ atomic_install() {
 
   rm -rf "${tmp_path}"
   cp -R "${bundle_dir}" "${tmp_path}"
-  rm -rf "${INSTALL_DIR}/${BUNDLE_NAME}"
+  rm -rf "${INSTALL_DIR:?}/${BUNDLE_NAME:?}"
   mv "${tmp_path}" "${INSTALL_DIR}/${BUNDLE_NAME}"
 
   info "Installed ${INSTALL_DIR}/${BUNDLE_NAME}"
@@ -186,9 +186,11 @@ stop_if_running() {
 # itself as a login item on first launch via SMAppService.
 launch_app() {
   echo "  Launching ToTally…"
-  open "${INSTALL_DIR}/${BUNDLE_NAME}" 2>/dev/null && \
-    info "ToTally launched" || \
+  if open "${INSTALL_DIR}/${BUNDLE_NAME}" 2>/dev/null; then
+    info "ToTally launched"
+  else
     warn "Could not launch ToTally automatically — open it from /Applications"
+  fi
 }
 
 # ---------------------------------------------------------------------------

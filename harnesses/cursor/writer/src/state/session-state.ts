@@ -6,18 +6,11 @@
  * gets a JSON file tracking the mapping to ToTally's internal IDs, turn/
  * message/tool counters, and in-flight tool calls.
  *
- * Writes use a tmp-then-rename pattern to ensure readers never observe a
- * partial file. The directory is created on first write.
+ * IO is delegated to @token-tally/harness-kit's generic state-io helpers,
+ * which use pid-suffixed tmp files to avoid concurrent clobbering (m7 fix).
  */
 
-import {
-  readFile,
-  writeFile,
-  rename,
-  unlink,
-  mkdir,
-} from "node:fs/promises";
-import { dirname } from "node:path";
+import { readJsonState, writeJsonState, deleteJsonState } from "@token-tally/harness-kit";
 import { sessionStateFile } from "./paths.js";
 
 // ---------------------------------------------------------------------------
@@ -29,15 +22,8 @@ import { sessionStateFile } from "./paths.js";
  *
  * Written after every hook invocation that modifies state, read at the start
  * of every subsequent hook invocation in the same session.
- *
- * Cursor-specific notes vs. Claude Code:
- * - `messageIndex` tracks assistant messages separately from turns because
- *   `afterAgentResponse` fires without a separate turn-start event.
- * - `toolIndex` provides a synthesized tool-call id when `tool_use_id` is absent.
- * - `pendingHarnessMessageIds` tracks placeholder IDs waiting for token backfill.
- * - `lastGenerationId` detects when a new `generation_id` arrives (= new turn).
  */
-export interface SessionState {
+export type SessionState = {
   // ---- ToTally-internal IDs -----------------------------------------------
 
   /** UUID of the sessions row in ToTally's central store. */
@@ -76,23 +62,19 @@ export interface SessionState {
 
   /**
    * Monotonically incrementing message counter within this session.
-   * Used as fallback for harness_message_id when conversation_id or
-   * generation_id is absent.
+   * Fallback for harness_message_id when conversation_id or generation_id
+   * is absent.
    */
   messageIndex: number;
 
   // ---- Tool call tracking --------------------------------------------------
 
-  /**
-   * Monotonically incrementing tool-call counter within this session.
-   * Used as fallback when `tool_use_id` is absent.
-   */
+  /** Monotonically incrementing tool-call counter within this session. */
   toolIndex: number;
 
   /**
-   * Tool calls that have started (preToolUse) but not yet completed
-   * (postToolUse / postToolUseFailure). Keyed by the Cursor tool_use_id, or
-   * by the synthesised harness tool call id when tool_use_id is absent.
+   * Tool calls that have started (preToolUse) but not yet completed.
+   * Keyed by Cursor tool_use_id, or by the synthesised harness tool call id.
    */
   activeTools: Record<string, { startedAt: number; toolName: string; harnessToolCallId: string }>;
 
@@ -107,13 +89,8 @@ export interface SessionState {
   // ---- Backfill control ----------------------------------------------------
 
   /**
-   * Harness message IDs written by `afterAgentResponse` that have not yet
-   * been backfilled with real token counts. Populated by afterAgentResponse,
-   * consumed and cleared by `runBackfill` in the stop/sessionEnd handlers.
-   *
-   * Used as correlation hints in `drainTranscript` so backfill upserts update
-   * the correct placeholder rows even when transcript entry IDs differ from
-   * the generation_id embedded in the placeholder ID.
+   * Harness message IDs written by `afterAgentResponse` not yet backfilled.
+   * Populated by afterAgentResponse; consumed by `runBackfill` in stop/sessionEnd.
    */
   pendingHarnessMessageIds: string[];
 
@@ -124,7 +101,7 @@ export interface SessionState {
    * null otherwise.
    */
   subscriptionId: string | null;
-}
+};
 
 // ---------------------------------------------------------------------------
 // Read
@@ -133,31 +110,17 @@ export interface SessionState {
 /**
  * Reads the state file for the given harness session id.
  *
- * Returns `null` when:
+ * Returns null when:
  * - The file does not exist (ENOENT) — normal for the first hook of a session.
- * - The file exists but contains invalid JSON — logs a warning and returns null
- *   so the caller can recover rather than crash.
+ * - The file contains invalid JSON — logs a warning and returns null.
  */
 export async function readSessionState(
   harnessSessionId: string,
 ): Promise<SessionState | null> {
-  const path = sessionStateFile(harnessSessionId);
-  let raw: string;
-  try {
-    raw = await readFile(path, "utf8");
-  } catch (err: unknown) {
-    if (isEnoent(err)) return null;
-    throw err;
-  }
-
-  try {
-    return JSON.parse(raw) as SessionState;
-  } catch {
-    console.warn(
-      `[cursor-writer] state file for session ${harnessSessionId} contains invalid JSON; discarding`,
-    );
-    return null;
-  }
+  return readJsonState<SessionState>(
+    sessionStateFile(harnessSessionId),
+    "[cursor-writer]",
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -167,19 +130,14 @@ export async function readSessionState(
 /**
  * Atomically writes `state` to the session state file.
  *
- * Uses a `.tmp` intermediate file and `fs.rename` so concurrent readers never
- * observe a partial write. Creates the state directory if it does not exist.
+ * Uses a pid-suffixed tmp file and `fs.rename` so concurrent readers never
+ * observe a partial write. Creates the state directory if needed.
  */
 export async function writeSessionState(
   harnessSessionId: string,
   state: SessionState,
 ): Promise<void> {
-  const path = sessionStateFile(harnessSessionId);
-  const tmp = `${path}.tmp`;
-
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(tmp, JSON.stringify(state), "utf8");
-  await rename(tmp, path);
+  return writeJsonState(sessionStateFile(harnessSessionId), state);
 }
 
 // ---------------------------------------------------------------------------
@@ -188,20 +146,12 @@ export async function writeSessionState(
 
 /**
  * Deletes the state file for the given harness session id.
- *
- * Best-effort: silently ignores ENOENT (file already gone is fine). Other
- * errors are re-thrown so they surface as unexpected failures.
+ * Silently ignores ENOENT; re-throws other errors.
  */
 export async function deleteSessionState(
   harnessSessionId: string,
 ): Promise<void> {
-  const path = sessionStateFile(harnessSessionId);
-  try {
-    await unlink(path);
-  } catch (err: unknown) {
-    if (isEnoent(err)) return;
-    throw err;
-  }
+  return deleteJsonState(sessionStateFile(harnessSessionId));
 }
 
 // ---------------------------------------------------------------------------
@@ -210,7 +160,7 @@ export async function deleteSessionState(
 
 /**
  * Create a fresh SessionState for a newly discovered session.
- * All counters start at 0; all optional fields are null/false.
+ * All counters start at 0; all optional fields are null/false/empty.
  */
 export function makeInitialSessionState(
   centralSessionId: string,
@@ -231,16 +181,4 @@ export function makeInitialSessionState(
     pendingHarnessMessageIds: [],
     subscriptionId: null,
   };
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function isEnoent(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    (err as NodeJS.ErrnoException).code === "ENOENT"
-  );
 }

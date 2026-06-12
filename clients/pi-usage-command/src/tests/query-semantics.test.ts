@@ -1,17 +1,16 @@
 /**
  * src/tests/query-semantics.test.ts
  *
- * Tests for pi-usage-command query-layer contract:
- *   1. Token/turn/session counts include ALL rows regardless of cost_source.
- *   2. Cost sums exclude cost_source='unknown' rows (CASE guard).
- *   3. unpriced_count is reported separately.
- *   4. Schema compatibility window enforcement in openReadOnly.
+ * Thin integration test for the Pi usage-command query wiring.
+ *
+ * Full query-semantics tests (unpriced-row contract, drift fixes) now live in
+ * @token-tally/queries/tests/query-semantics.test.ts. This file verifies:
+ *   1. Tab wrapper functions are reachable and return the expected top-level shape
+ *      (wiring check — confirms the delegation to @token-tally/queries works).
+ *   2. The schema compatibility window enforcement in openReadOnly works
+ *      as expected for the Pi client (client-specific behaviour stays here).
  *
  * Runs via: node --experimental-strip-types --test 'src/tests/**\/*.test.ts'
- *
- * NOTE: pi-usage-command exposes queryTabSummary/queryTabModels/queryTabDaily
- * as the public API; the internal queryCostBucket helper is tested indirectly
- * through those exported functions.
  */
 
 import { describe, it, before, after } from "node:test";
@@ -19,135 +18,41 @@ import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { rmSync } from "node:fs";
-
-// Import Database directly — better-sqlite3 is available in this package.
-// We create fixture DBs at known paths for tests that need files (schema window).
 import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
 
-// Import the public query API and the db helper.
 import { queryTabSummary, queryTabModels, queryTabDaily } from "../queries.ts";
 import { openReadOnly } from "../db.ts";
 
 // ---------------------------------------------------------------------------
-// Fixture helpers
+// Helpers
 // ---------------------------------------------------------------------------
 
-const T0 = Date.now(); // current time so rows fall in today/week/month windows
+const T0 = Date.now();
 
-function createFixtureDb(): { db: BetterSqlite3.Database; path: string } {
-  const path = join(
-    tmpdir(),
-    `tt-pi-test-${Date.now()}-${Math.random().toString(36).slice(2)}.db`,
-  );
+function createMinimalDb(): { db: BetterSqlite3.Database; path: string } {
+  const path = join(tmpdir(), `tt-pi-wire-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
   const db = new Database(path);
   db.pragma("foreign_keys = ON");
   db.pragma("journal_mode = WAL");
-
   db.exec(`
     CREATE TABLE schema_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-    CREATE TABLE harnesses (
-      name TEXT PRIMARY KEY, display_name TEXT NOT NULL,
-      version TEXT, integration_version TEXT,
-      first_seen_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL
-    );
-    CREATE TABLE sessions (
-      id TEXT PRIMARY KEY, harness_id TEXT NOT NULL,
-      harness_session_id TEXT NOT NULL, session_file TEXT,
-      cwd TEXT, repo_owner TEXT, repo_name TEXT, repo_remote TEXT,
-      started_at INTEGER NOT NULL, ended_at INTEGER,
-      FOREIGN KEY (harness_id) REFERENCES harnesses(name)
-    );
-    CREATE TABLE turns (
-      id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
-      harness_id TEXT NOT NULL, harness_turn_id TEXT NOT NULL,
-      turn_index INTEGER, started_at INTEGER NOT NULL, ended_at INTEGER,
-      provider TEXT, model_id TEXT,
-      FOREIGN KEY (session_id) REFERENCES sessions(id),
-      FOREIGN KEY (harness_id) REFERENCES harnesses(name)
-    );
-    CREATE TABLE tool_calls (
-      id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
-      turn_id TEXT, harness_id TEXT NOT NULL,
-      harness_tool_call_id TEXT NOT NULL,
-      tool_name TEXT NOT NULL,
-      started_at INTEGER NOT NULL, ended_at INTEGER,
-      is_error INTEGER NOT NULL DEFAULT 0,
-      FOREIGN KEY (session_id) REFERENCES sessions(id),
-      FOREIGN KEY (harness_id) REFERENCES harnesses(name)
-    );
-    CREATE TABLE llm_messages (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL, turn_id TEXT,
-      harness_id TEXT NOT NULL, harness_message_id TEXT NOT NULL,
-      ts INTEGER NOT NULL, provider TEXT, model_id TEXT,
-      input_tokens INTEGER NOT NULL DEFAULT 0,
-      output_tokens INTEGER NOT NULL DEFAULT 0,
-      cache_read_tokens INTEGER NOT NULL DEFAULT 0,
-      cache_write_tokens INTEGER NOT NULL DEFAULT 0,
-      cost_input_micros INTEGER NOT NULL DEFAULT 0,
-      cost_output_micros INTEGER NOT NULL DEFAULT 0,
-      cost_cache_read_micros INTEGER NOT NULL DEFAULT 0,
-      cost_cache_write_micros INTEGER NOT NULL DEFAULT 0,
-      cost_total_micros INTEGER NOT NULL DEFAULT 0,
-      cost_currency TEXT NOT NULL DEFAULT 'USD',
-      cost_source TEXT NOT NULL DEFAULT 'unknown'
-        CHECK (cost_source IN ('harness','writer','subscription_covered','unknown')),
-      subscription_id TEXT,
-      FOREIGN KEY (session_id) REFERENCES sessions(id),
-      FOREIGN KEY (harness_id) REFERENCES harnesses(name),
-      CHECK (cost_total_micros = cost_input_micros + cost_output_micros
-             + cost_cache_read_micros + cost_cache_write_micros)
-    );
+    CREATE TABLE harnesses (name TEXT PRIMARY KEY, display_name TEXT NOT NULL, version TEXT, integration_version TEXT, first_seen_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL);
+    CREATE TABLE sessions (id TEXT PRIMARY KEY, harness_id TEXT NOT NULL, harness_session_id TEXT NOT NULL, session_file TEXT, cwd TEXT, repo_owner TEXT, repo_name TEXT, repo_remote TEXT, started_at INTEGER NOT NULL, ended_at INTEGER, FOREIGN KEY (harness_id) REFERENCES harnesses(name));
+    CREATE TABLE turns (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, harness_id TEXT NOT NULL, harness_turn_id TEXT NOT NULL, turn_index INTEGER, started_at INTEGER NOT NULL, ended_at INTEGER, provider TEXT, model_id TEXT, FOREIGN KEY (session_id) REFERENCES sessions(id), FOREIGN KEY (harness_id) REFERENCES harnesses(name));
+    CREATE TABLE tool_calls (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, turn_id TEXT, harness_id TEXT NOT NULL, harness_tool_call_id TEXT NOT NULL, tool_name TEXT NOT NULL, started_at INTEGER NOT NULL, ended_at INTEGER, is_error INTEGER NOT NULL DEFAULT 0, FOREIGN KEY (session_id) REFERENCES sessions(id), FOREIGN KEY (harness_id) REFERENCES harnesses(name));
+    CREATE TABLE llm_messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, turn_id TEXT, harness_id TEXT NOT NULL, harness_message_id TEXT NOT NULL, ts INTEGER NOT NULL, provider TEXT, model_id TEXT, input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, cache_read_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0, cost_input_micros INTEGER NOT NULL DEFAULT 0, cost_output_micros INTEGER NOT NULL DEFAULT 0, cost_cache_read_micros INTEGER NOT NULL DEFAULT 0, cost_cache_write_micros INTEGER NOT NULL DEFAULT 0, cost_total_micros INTEGER NOT NULL DEFAULT 0, cost_currency TEXT NOT NULL DEFAULT 'USD', cost_source TEXT NOT NULL DEFAULT 'unknown' CHECK (cost_source IN ('harness','writer','subscription_covered','unknown')), subscription_id TEXT, FOREIGN KEY (session_id) REFERENCES sessions(id), FOREIGN KEY (harness_id) REFERENCES harnesses(name), CHECK (cost_total_micros = cost_input_micros + cost_output_micros + cost_cache_read_micros + cost_cache_write_micros));
     INSERT INTO schema_metadata VALUES ('schema_version','1');
     INSERT INTO harnesses VALUES ('test','Test',NULL,NULL,${T0},${T0});
     INSERT INTO sessions VALUES ('s1','test','hs1',NULL,NULL,NULL,NULL,NULL,${T0},${T0 + 3600000});
     INSERT INTO turns VALUES ('t1','s1','test','ht1',0,${T0},${T0 + 1000},'anthropic','claude-opus-4');
   `);
-
+  // Insert one priced and one unpriced message so tab functions have data.
+  // Use ? placeholders for all values to avoid better-sqlite3 misinterpreting
+  // literal integers that start with '$' as named parameter placeholders.
+  db.prepare(`INSERT INTO llm_messages (id,session_id,turn_id,harness_id,harness_message_id,ts,model_id,input_tokens,output_tokens,cost_input_micros,cost_output_micros,cost_cache_read_micros,cost_cache_write_micros,cost_total_micros,cost_source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run('m1','s1','t1','test','hm1',T0,'claude-opus-4',100,50,300,750,0,0,1050,'writer');
+  db.prepare(`INSERT INTO llm_messages (id,session_id,turn_id,harness_id,harness_message_id,ts,model_id,input_tokens,output_tokens,cost_input_micros,cost_output_micros,cost_cache_read_micros,cost_cache_write_micros,cost_total_micros,cost_source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run('m2','s1','t1','test','hm2',T0,'claude-opus-4',300,120,0,0,0,0,0,'unknown');
   return { db, path };
-}
-
-function insertMessage(
-  db: BetterSqlite3.Database,
-  opts: {
-    id: string;
-    sessionId?: string;
-    turnId?: string | null;
-    ts?: number;
-    modelId?: string;
-    inputTokens?: number;
-    outputTokens?: number;
-    costInputMicros?: number;
-    costOutputMicros?: number;
-    costSource: "writer" | "harness" | "subscription_covered" | "unknown";
-  },
-): void {
-  const {
-    id, sessionId = "s1", turnId = "t1", ts = T0,
-    modelId = "claude-opus-4",
-    inputTokens = 0, outputTokens = 0,
-    costInputMicros = 0, costOutputMicros = 0,
-    costSource,
-  } = opts;
-  const costTotal = costInputMicros + costOutputMicros;
-
-  db.prepare(`
-    INSERT INTO llm_messages (
-      id, session_id, turn_id, harness_id, harness_message_id,
-      ts, model_id,
-      input_tokens, output_tokens,
-      cost_input_micros, cost_output_micros,
-      cost_cache_read_micros, cost_cache_write_micros,
-      cost_total_micros, cost_source
-    ) VALUES (?, ?, ?, 'test', ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
-  `).run(
-    id, sessionId, turnId, `hm-${id}`,
-    ts, modelId,
-    inputTokens, outputTokens,
-    costInputMicros, costOutputMicros,
-    costTotal, costSource,
-  );
 }
 
 function createVersionedDb(path: string, version: number): void {
@@ -160,120 +65,96 @@ function createVersionedDb(path: string, version: number): void {
 }
 
 // ---------------------------------------------------------------------------
-// Shared fixture
+// Wiring tests
 // ---------------------------------------------------------------------------
 
-let fixDb: BetterSqlite3.Database;
-let fixPath: string;
+describe("queryTabSummary wiring: returns expected shape", () => {
+  let db: BetterSqlite3.Database;
+  let path: string;
 
-before(() => {
-  const fix = createFixtureDb();
-  fixDb = fix.db;
-  fixPath = fix.path;
-
-  // 2 priced messages
-  insertMessage(fixDb, { id: "m1", inputTokens: 100, outputTokens: 50, costInputMicros: 300, costOutputMicros: 750, costSource: "writer" });
-  insertMessage(fixDb, { id: "m2", inputTokens: 200, outputTokens: 80, costInputMicros: 600, costOutputMicros: 1200, costSource: "writer" });
-  // 1 unpriced message (real usage, zero cost)
-  insertMessage(fixDb, { id: "m3", inputTokens: 300, outputTokens: 120, costInputMicros: 0, costOutputMicros: 0, costSource: "unknown" });
-
-  fixDb.close();
-});
-
-after(() => {
-  for (const suffix of ["", "-wal", "-shm"]) {
-    try { rmSync(fixPath + suffix); } catch { /* ignore */ }
-  }
-});
-
-// ---------------------------------------------------------------------------
-// Token semantics via queryTabSummary
-// ---------------------------------------------------------------------------
-
-describe("queryTabSummary: unpriced-row semantics", () => {
-  it("counts tokens from ALL rows in all time buckets", () => {
-    const result = openReadOnly(fixPath);
-    assert.ok(result.ok, `openReadOnly failed: ${!result.ok ? result.reason : "n/a"}`);
-    const { db, close } = result;
-    try {
-      const data = queryTabSummary(db) as {
-        today: { billable_tokens: number; cost_usd: number; unpriced_count: number };
-        week:  { billable_tokens: number; cost_usd: number };
-      };
-
-      // All 3 messages are within the "all time" window used by queryTabSummary for today/week
-      // (the fixture ts = T0 = 2023-11-14, well within 30-day lookback from now)
-      // Expected billable_tokens: (100+50)+(200+80)+(300+120) = 850
-      assert.equal(
-        data.today.billable_tokens,
-        850,
-        "today.billable_tokens must include unpriced rows",
-      );
-      // Expected cost: (300+750+600+1200)/1e6 = 0.00285
-      const expectedCost = (300 + 750 + 600 + 1200) / 1_000_000;
-      assert.ok(
-        Math.abs(data.today.cost_usd - expectedCost) < 1e-9,
-        `today.cost_usd should be ${expectedCost}, got ${data.today.cost_usd}`,
-      );
-      assert.equal(data.today.unpriced_count, 1, "today.unpriced_count must be 1");
-    } finally {
-      close();
+  before(() => {
+    const fix = createMinimalDb();
+    db = fix.db;
+    path = fix.path;
+  });
+  after(() => {
+    db.close();
+    for (const suffix of ["", "-wal", "-shm"]) {
+      try { rmSync(path + suffix); } catch { /* ignore */ }
     }
+  });
+
+  it("returns today/week/month/session buckets with unpriced_count", () => {
+    const data = queryTabSummary(db, "all") as {
+      today: { billable_tokens: number; unpriced_count: number };
+      week:  { billable_tokens: number };
+      month: { billable_tokens: number };
+      session: { billable_tokens: number };
+    };
+    // Both messages are within 'all' window; billable = (100+50) + (300+120) = 570
+    assert.equal(data.today.billable_tokens, 570, "summary.today.billable_tokens");
+    assert.equal(data.today.unpriced_count, 1, "summary.today.unpriced_count");
+    assert.ok("week"  in data, "summary has week bucket");
+    assert.ok("month" in data, "summary has month bucket");
+  });
+});
+
+describe("queryTabModels wiring: returns rows array", () => {
+  let db: BetterSqlite3.Database;
+  let path: string;
+
+  before(() => {
+    const fix = createMinimalDb();
+    db = fix.db;
+    path = fix.path;
+  });
+  after(() => {
+    db.close();
+    for (const suffix of ["", "-wal", "-shm"]) {
+      try { rmSync(path + suffix); } catch { /* ignore */ }
+    }
+  });
+
+  it("returns rows with model_id and unpriced_count", () => {
+    const data = queryTabModels(db, "all") as {
+      rows: Array<{ model_id: string; billable_tokens: number }>;
+      unpriced_count: number;
+    };
+    assert.equal(data.unpriced_count, 1);
+    assert.ok(data.rows.length > 0, "should have model rows");
+    assert.equal(data.rows[0]!.billable_tokens, 570);
+  });
+});
+
+describe("queryTabDaily wiring: returns rows array", () => {
+  let db: BetterSqlite3.Database;
+  let path: string;
+
+  before(() => {
+    const fix = createMinimalDb();
+    db = fix.db;
+    path = fix.path;
+  });
+  after(() => {
+    db.close();
+    for (const suffix of ["", "-wal", "-shm"]) {
+      try { rmSync(path + suffix); } catch { /* ignore */ }
+    }
+  });
+
+  it("returns daily rows and unpriced_count", () => {
+    const data = queryTabDaily(db, "all") as {
+      rows: Array<{ date: string; billable_tokens: number }>;
+      unpriced_count: number;
+    };
+    assert.equal(data.unpriced_count, 1);
+    assert.equal(data.rows.length, 1, "one day of data");
+    assert.equal(data.rows[0]!.billable_tokens, 570);
   });
 });
 
 // ---------------------------------------------------------------------------
-// Token semantics via queryTabModels
-// ---------------------------------------------------------------------------
-
-describe("queryTabModels: unpriced-row semantics", () => {
-  it("counts tokens from unpriced rows in model breakdown", () => {
-    const result = openReadOnly(fixPath);
-    assert.ok(result.ok);
-    const { db, close } = result;
-    try {
-      const data = queryTabModels(db, "all") as {
-        rows: Array<{ model_id: string; billable_tokens: number; cost_usd: number }>;
-        unpriced_count: number;
-      };
-      assert.equal(data.unpriced_count, 1);
-      assert.equal(data.rows.length, 1);
-      const row = data.rows[0]!;
-      assert.equal(row.billable_tokens, 850, "model billable_tokens must include unpriced");
-      const expectedCost = (300 + 750 + 600 + 1200) / 1_000_000;
-      assert.ok(Math.abs(row.cost_usd - expectedCost) < 1e-9);
-    } finally {
-      close();
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Token semantics via queryTabDaily
-// ---------------------------------------------------------------------------
-
-describe("queryTabDaily: unpriced-row semantics", () => {
-  it("counts tokens from unpriced rows in daily breakdown", () => {
-    const result = openReadOnly(fixPath);
-    assert.ok(result.ok);
-    const { db, close } = result;
-    try {
-      const data = queryTabDaily(db, "all") as {
-        rows: Array<{ date: string; billable_tokens: number; cost_usd: number }>;
-        unpriced_count: number;
-      };
-      assert.equal(data.unpriced_count, 1);
-      assert.equal(data.rows.length, 1, "one day of data");
-      const row = data.rows[0]!;
-      assert.equal(row.billable_tokens, 850, "daily billable_tokens includes unpriced");
-    } finally {
-      close();
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Schema compatibility window
+// Schema compatibility window (Pi-specific openReadOnly behavior)
 // ---------------------------------------------------------------------------
 
 describe("openReadOnly: schema compatibility window", () => {

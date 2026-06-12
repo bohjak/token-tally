@@ -189,7 +189,12 @@ main() {
     *) warn "${HOME}/.local/bin is not on PATH; Claude Code may not find token-tally-claude-hook" ;;
   esac
 
-  merge_settings "${settings_path}" "token-tally-claude-hook"
+  # Pass the absolute symlink path rather than the bare hook name so
+  # Claude Code config contains a path-stable command. The owned() filter
+  # in merge_settings already dual-matches bare names (for old installs) and
+  # the configured command (for new installs), so re-running install over an
+  # old bare-name entry converges cleanly to the absolute path.
+  merge_settings "${settings_path}" "${hook_link}"
   info "Claude Code hooks merged into ${settings_path}"
 
   # ---- Daemon note ----

@@ -174,9 +174,15 @@ final class AnalyticsDatabase {
         // model_id is present on llm_messages in central schema v1+.
         // The hasMessageModelID flag is preserved for the query layer's model-attribution
         // SQL expression; it will always be true for valid central-schema databases.
+        //
+        // schemaIsDegraded is set when version > maxKnownSchemaVersion but the
+        // database still passed validation (i.e. it is within the forward window).
+        // The tray can read all columns it knows about; the user must update the
+        // app to gain access to any columns/tables added in the newer versions.
         return AnalyticsSchema(
             schemaVersion: version,
-            hasMessageModelID: llmColumns.contains("model_id")
+            hasMessageModelID: llmColumns.contains("model_id"),
+            schemaIsDegraded: version > maxKnownSchemaVersion
         )
     }
 
@@ -539,4 +545,13 @@ struct AnalyticsSchema: Equatable {
     /// Always true for central schema v1+; retained for forward-compatibility in
     /// case a future schema version renames the column.
     let hasMessageModelID: Bool
+
+    /// True when the database schema is newer than the tray's max-known version
+    /// but still within the forward-compatibility window (so reads succeed).
+    ///
+    /// The tray reads what it knows and silently ignores unknown columns/tables,
+    /// but the user should update the app to restore full fidelity. This flag
+    /// is propagated through `UsageSnapshot` so the popover can show an update
+    /// banner without any additional database queries.
+    let schemaIsDegraded: Bool
 }

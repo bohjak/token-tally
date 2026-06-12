@@ -131,7 +131,10 @@ enum AnalyticsQueries {
             // Surface the week-window unpriced count from the aggregate bucket.
             // This is the same value that appears in week.unpricedMessages but
             // promoted to the top level so the UI doesn't have to drill in.
-            unpricedMessages: week.unpricedMessages
+            unpricedMessages: week.unpricedMessages,
+            // Forward the degraded flag so PopoverView can show the update
+            // banner without making a second database query.
+            schemaIsDegraded: schema.schemaIsDegraded
         )
     }
 

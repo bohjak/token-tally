@@ -5,7 +5,8 @@
  *   1. Register the cursor harness with the store.
  *   2. Create (or upsert) the session row; store the central UUID in state.
  *   3. Optionally record a subscription period if the user configured one.
- *   4. Fire-and-forget git metadata capture (non-blocking).
+ *   4. Await git metadata capture (M7 fix: was fire-and-forget; now awaited
+ *      so the capture completes before the hook process closes the writer).
  *
  * This event has BOTH `session_id` and `conversation_id` per Cursor's docs —
  * both are equivalent here. We use `conversation_id ?? session_id` as the
@@ -21,7 +22,7 @@ import {
 import { extractHarnessSessionId, centralUuid } from "../ids/synthesize.js";
 import { captureRepoSnapshot } from "../git/capture.js";
 import { loadCursorSubscriptionConfig } from "../subscription/config.js";
-import { computeMonthlyPeriod } from "../subscription/periods.js";
+import { computeMonthlyPeriod, inferProvider } from "@token-tally/harness-kit";
 import { INTEGRATION_VERSION } from "../version.js";
 
 // ---------------------------------------------------------------------------
@@ -91,9 +92,8 @@ export async function handle(
   }
 
   // ── 5. Persist initial session state ────────────────────────────────────
-  // centralUuid() is imported but not used here — we use the value from
-  // recordSession since the store owns the UUID for sessions.
-  void centralUuid; // keep import used; actual session UUID comes from the store
+  // centralUuid() is imported but not used here — the store owns the session UUID.
+  void centralUuid;
   const state = makeInitialSessionState(centralSessionId, harnessSessionId);
   state.subscriptionId = subscriptionId;
   if (payload.model) {
@@ -102,48 +102,24 @@ export async function handle(
   }
   await writeSessionState(harnessSessionId, state);
 
-  // ── 6. Fire-and-forget git capture ───────────────────────────────────────
-  // Do not await — git metadata is best-effort and must not delay the hook.
-  // The idempotent upsert on (harness_id, harness_session_id) safely patches
-  // the repo fields in once the subprocess completes.
+  // ── 6. Await git capture (M7 fix) ─────────────────────────────────────────
+  // Previously fire-and-forget: the hook could exit before git finished,
+  // losing repo metadata. We now await so the capture completes before
+  // writer.close(). captureRepoSnapshot is bounded by GIT_TIMEOUT_MS; if the
+  // outer DISPATCH_TIMEOUT_MS fires first, this await is abandoned — acceptable
+  // for the >3s case; the common (<1s) case now reliably records repo metadata.
   if (cwd) {
-    captureRepoSnapshot(cwd)
-      .then(async (snapshot) => {
-        if (snapshot === null) return;
-        await writer.recordSession({
-          harnessId: "cursor",
-          harnessSessionId,
-          cwd,
-          startedAt: 0, // NULLIF guard: preserves original start time
-          repoOwner: snapshot.repoOwner ?? undefined,
-          repoName: snapshot.repoName ?? undefined,
-          repoRemote: snapshot.repoRemote ?? undefined,
-        });
-      })
-      .catch(() => {
-        // Best-effort: never surface to caller.
+    const snapshot = await captureRepoSnapshot(cwd).catch(() => null);
+    if (snapshot !== null) {
+      await writer.recordSession({
+        harnessId: "cursor",
+        harnessSessionId,
+        cwd,
+        startedAt: 0, // NULLIF guard: preserves original start time
+        repoOwner: snapshot.repoOwner ?? undefined,
+        repoName: snapshot.repoName ?? undefined,
+        repoRemote: snapshot.repoRemote ?? undefined,
       });
+    }
   }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Infer the LLM provider from a model ID using well-known prefixes.
- * Returns null for unknown or ambiguous model IDs.
- */
-function inferProvider(modelId: string): string | null {
-  if (modelId.startsWith("claude-")) return "anthropic";
-  if (
-    modelId.startsWith("gpt-") ||
-    modelId.startsWith("o1-") ||
-    modelId.startsWith("o3-") ||
-    modelId.startsWith("o4-")
-  )
-    return "openai";
-  if (modelId.startsWith("gemini-")) return "google";
-  if (modelId.startsWith("grok-")) return "xai";
-  return null;
 }

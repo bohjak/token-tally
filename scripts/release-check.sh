@@ -7,7 +7,14 @@
 #   3. Swift build (clients/macos-tray)
 #   4. Swift tests (clients/macos-tray)
 #   5. shellcheck on installer scripts (if shellcheck is available)
-#   6. Large performance fixture generation + Swift performance tests
+#   6. Pricing table drift check
+#   7. Schema constant parity (Swift ↔ TypeScript)
+#   8. Claude Code writer tests
+#   9. Cursor writer tests
+#  10. Queries package tests
+#  11. Harness-kit package tests
+#  12. Pi writer tests
+#  13. Large performance fixture generation + Swift performance tests
 #      (skipped if --skip-perf is passed or pnpm exec tsx is unavailable)
 #
 # FLAGS
@@ -109,6 +116,8 @@ check_typecheck() {
   # have multiple tsconfigs covered by the script.
   local packages=(
     "store"
+    "clients/queries"
+    "harnesses/kit"
     "harnesses/pi/writer-extension"
     "harnesses/cursor/writer"
     "harnesses/claude-code/writer"
@@ -247,6 +256,24 @@ check_claude_code_writer_tests() {
   fi
 }
 
+check_schema_constants() {
+  section "Schema constant parity (Swift \u2194 TypeScript)"
+
+  local check_script="${REPO_ROOT}/scripts/check-schema-constants.sh"
+  if [[ ! -f "${check_script}" ]]; then
+    warn "scripts/check-schema-constants.sh not found \u2014 skipping parity check"
+    return
+  fi
+
+  # Pass REPO_ROOT explicitly so the check works regardless of the caller's
+  # working directory.
+  if (bash "${check_script}" "${REPO_ROOT}" 2>&1); then
+    pass "schema constants: Swift and TypeScript values match"
+  else
+    fail "schema constants: Swift \u2194 TypeScript mismatch (see output above)"
+  fi
+}
+
 check_cursor_writer_tests() {
   section "Cursor writer tests"
 
@@ -261,10 +288,9 @@ check_cursor_writer_tests() {
     return
   fi
 
-  # Build first so compiled .js test files are current. A missing main.ts
-  # (expected until T4 is implemented) will surface as a build failure here.
+  # Build first so compiled .js test files are current.
   if ! (cd "${REPO_ROOT}" && pnpm --filter @token-tally/cursor-writer build 2>&1); then
-    fail "Cursor writer: build failed — cannot run tests (T4 likely not yet implemented)"
+    fail "Cursor writer: build failed — cannot run tests"
     return
   fi
 
@@ -272,6 +298,80 @@ check_cursor_writer_tests() {
     pass "Cursor writer tests: all passed"
   else
     fail "Cursor writer tests: one or more tests failed"
+  fi
+}
+
+check_queries_tests() {
+  section "Queries package tests (@token-tally/queries)"
+
+  if ! command -v pnpm &>/dev/null; then
+    warn "pnpm not found — skipping queries tests"
+    return
+  fi
+
+  local queries_dir="${REPO_ROOT}/clients/queries"
+  if [[ ! -f "${queries_dir}/package.json" ]]; then
+    warn "@token-tally/queries not found at clients/queries — skipping"
+    return
+  fi
+
+  if ! (cd "${REPO_ROOT}" && pnpm --filter @token-tally/queries build 2>&1); then
+    fail "@token-tally/queries: build failed — cannot run tests"
+    return
+  fi
+
+  if (cd "${REPO_ROOT}" && pnpm --filter @token-tally/queries test 2>&1); then
+    pass "queries tests: all passed"
+  else
+    fail "queries tests: one or more tests failed"
+  fi
+}
+
+check_harness_kit_tests() {
+  section "Harness-kit package tests (@token-tally/harness-kit)"
+
+  if ! command -v pnpm &>/dev/null; then
+    warn "pnpm not found — skipping harness-kit tests"
+    return
+  fi
+
+  local kit_dir="${REPO_ROOT}/harnesses/kit"
+  if [[ ! -f "${kit_dir}/package.json" ]]; then
+    warn "@token-tally/harness-kit not found at harnesses/kit — skipping"
+    return
+  fi
+
+  if ! (cd "${REPO_ROOT}" && pnpm --filter @token-tally/harness-kit build 2>&1); then
+    fail "@token-tally/harness-kit: build failed — cannot run tests"
+    return
+  fi
+
+  if (cd "${REPO_ROOT}" && pnpm --filter @token-tally/harness-kit test 2>&1); then
+    pass "harness-kit tests: all passed"
+  else
+    fail "harness-kit tests: one or more tests failed"
+  fi
+}
+
+check_pi_writer_tests() {
+  section "Pi writer tests (@token-tally/pi-writer)"
+
+  if ! command -v pnpm &>/dev/null; then
+    warn "pnpm not found — skipping Pi writer tests"
+    return
+  fi
+
+  local pi_writer_dir="${REPO_ROOT}/harnesses/pi/writer-extension"
+  if [[ ! -f "${pi_writer_dir}/package.json" ]]; then
+    warn "Pi writer not found at harnesses/pi/writer-extension — skipping"
+    return
+  fi
+
+  # Pi writer tests run directly via tsx — no separate build step needed.
+  if (cd "${REPO_ROOT}" && pnpm --filter @token-tally/pi-writer test 2>&1); then
+    pass "Pi writer tests: all passed"
+  else
+    fail "Pi writer tests: one or more tests failed"
   fi
 }
 
@@ -351,8 +451,12 @@ main() {
   check_swift_tests
   check_shellcheck
   check_pricing
+  check_schema_constants
   check_claude_code_writer_tests
   check_cursor_writer_tests
+  check_queries_tests
+  check_harness_kit_tests
+  check_pi_writer_tests
   check_perf
 
   print_summary

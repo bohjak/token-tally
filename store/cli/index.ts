@@ -14,7 +14,7 @@
  */
 
 import { spawn } from "child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "fs";
 import { basename, dirname, join } from "path";
 import { pathToFileURL } from "url";
 import { cmdImportLegacyPi } from "./import-legacy-pi";
@@ -1177,6 +1177,30 @@ async function cmdDaemon(args: {
   const dbPath = args.dbPath ?? defaultDatabasePath();
   const startedAt = new Date();
   mkdirSync(stateDir, { recursive: true });
+
+  // ── Log rotation ────────────────────────────────────────────────────────
+  //
+  // launchd/systemd redirect stdout+stderr to daemon.log (configured in the
+  // plist/unit file). We rotate once at startup to prevent unbounded growth;
+  // a single backup generation (.log.1) is sufficient — this is a diagnostics
+  // file, not an audit log.
+  const LOG_MAX_BYTES = 10 * 1024 * 1024; // 10 MiB
+  const logPath = join(stateDir, "logs", "daemon.log");
+  try {
+    const logStat = statSync(logPath);
+    if (logStat.size > LOG_MAX_BYTES) {
+      const rotatedPath = logPath + ".1";
+      // renameSync is atomic on POSIX; overwriting an existing .1 is intentional.
+      renameSync(logPath, rotatedPath);
+      process.stdout.write(
+        `token-tally daemon: log rotated (${
+          (logStat.size / (1024 * 1024)).toFixed(1)
+        } MiB → ${rotatedPath})\n`,
+      );
+    }
+  } catch {
+    // Non-fatal: log rotation failure must never prevent the daemon from starting.
+  }
 
   // ── Observability state (written to daemon.json after every pass) ───────
   let passCount = 0;

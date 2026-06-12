@@ -182,6 +182,22 @@ struct PopoverView: View {
     private func summarySection(_ snapshot: UsageSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 12) {
 
+            // 0. Degraded-schema banner: shown when the database schema is newer
+            // than this build's max-known version but still within the read
+            // window. The tray continues reading what it understands; the banner
+            // tells the user to run `make install` to get a matching build.
+            if snapshot.schemaIsDegraded {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.down.circle")
+                        .imageScale(.small)
+                    Text("Database schema is newer than this app — run `make install` to update ToTally")
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.caption2)
+                .foregroundStyle(.orange)
+                .padding(.horizontal, 2)
+            }
+
             // 1. Today summary.
             SummaryCard(
                 title: "Today",

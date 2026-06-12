@@ -81,15 +81,18 @@ EOF
 
   info "Launchd plist written to ${plist_path}"
 
-  # Unload any previously registered agent, then reload with the new plist.
-  # The 2>/dev/null suppresses "Could not find specified service" on first install.
-  launchctl unload "${plist_path}" 2>/dev/null || true
-  if launchctl load -w "${plist_path}"; then
+  # Unload any previously registered agent, then bootstrap with the new plist.
+  # macOS 14 deprecated launchctl load/unload in favour of bootstrap/bootout;
+  # using the modern API avoids deprecation warnings in system logs.
+  # bootout is idempotent: it exits non-zero if the service was never loaded,
+  # so we always suppress its exit code.
+  launchctl bootout "gui/$(id -u)/${plist_label}" 2>/dev/null || true
+  if launchctl bootstrap "gui/$(id -u)" "${plist_path}"; then
     info "Daemon registered with launchd (starts at login, restarts on crash)"
     info "Logs: ${log_path}"
     return 0
   else
-    err "launchctl load failed — daemon plist written but not loaded"
+    err "launchctl bootstrap failed — daemon plist written but not loaded"
     warn "Start manually with: token-tally daemon"
     return 1
   fi

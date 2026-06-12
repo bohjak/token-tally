@@ -23,6 +23,7 @@
     "node": ">=24.0.0"
   },
   "dependencies": {
+    "@token-tally/queries": "workspace:*",
     "better-sqlite3": "^12.9.0"
   },
   "devDependencies": {

@@ -43,10 +43,15 @@ doctor:
 test:
 	@pnpm --filter @token-tally/store build
 	@pnpm --filter @token-tally/store test
+	@pnpm --filter @token-tally/queries build
+	@pnpm --filter @token-tally/queries test
+	@pnpm --filter @token-tally/harness-kit build
+	@pnpm --filter @token-tally/harness-kit test
 	@pnpm --filter @token-tally/claude-code-writer build
 	@pnpm --filter @token-tally/claude-code-writer test
 	@pnpm --filter @token-tally/cursor-writer build
 	@pnpm --filter @token-tally/cursor-writer test
+	@pnpm --filter @token-tally/pi-writer test
 	@pnpm --filter @token-tally/web-explorer build:server
 	@pnpm --filter @token-tally/web-explorer test
 	@if ! xcrun --find xctest >/dev/null 2>&1; then \

@@ -1,6 +1,10 @@
 /**
  * pricing/compute.ts — Compute integer micro-dollar costs from token counts.
  *
+ * Delegates to @token-tally/store/pricing so the single rates.json table and
+ * lookup algorithm are used everywhere. The function signature is preserved so
+ * transcript/drain.ts does not need to change.
+ *
  * Costs are stored as integer micro-dollars (1 USD = 1_000_000 micros) to
  * avoid IEEE-754 drift in aggregations. The store CHECK constraint enforces:
  *   cost_total_micros = cost_input_micros + cost_output_micros
@@ -9,38 +13,13 @@
  */
 
 import type { AssistantUsage } from "../transcript/extract.js";
-import { lookupModelRates } from "./models.js";
+import {
+  computeCostMicros as storeComputeCostMicros,
+} from "@token-tally/store";
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-export interface CostBreakdown {
-  costInputMicros: number;
-  costOutputMicros: number;
-  costCacheReadMicros: number;
-  costCacheWriteMicros: number;
-  /**
-   * `"writer"` when rates were found and applied.
-   * `"unknown"` when the model is not in the pricing table — all cost fields
-   * are 0 and must not be summed into headline totals without a caveat.
-   */
-  costSource: "writer" | "unknown";
-}
-
-// ---------------------------------------------------------------------------
-// Conversion helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Convert a token count to integer micro-dollars given a rate in USD/MTok.
- *
- * Formula: round(tokens × (rateUSD / 1_000_000) × 1_000_000)
- *        = round(tokens × rateUSD)
- */
-function tokensToMicros(tokens: number, ratePerMTokUSD: number): number {
-  return Math.round(tokens * ratePerMTokUSD);
-}
+// Re-export the shared type so drain.ts and other callers can import it from
+// this module path without changing their import statements.
+export type { CostBreakdown } from "@token-tally/store";
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -57,30 +36,14 @@ function tokensToMicros(tokens: number, ratePerMTokUSD: number): number {
  * drain helper handles the legacy cost path separately before calling this
  * function (it only calls `computeCostMicros` for the non-legacy path).
  */
-export function computeCostMicros(usage: AssistantUsage): CostBreakdown {
-  const rates = lookupModelRates(usage.modelId);
-
-  if (rates === null) {
-    return {
-      costInputMicros: 0,
-      costOutputMicros: 0,
-      costCacheReadMicros: 0,
-      costCacheWriteMicros: 0,
-      costSource: "unknown",
-    };
-  }
-
-  return {
-    costInputMicros: tokensToMicros(usage.inputTokens, rates.inputPerMTokUSD),
-    costOutputMicros: tokensToMicros(usage.outputTokens, rates.outputPerMTokUSD),
-    costCacheReadMicros: tokensToMicros(
-      usage.cacheReadTokens,
-      rates.cacheReadPerMTokUSD,
-    ),
-    costCacheWriteMicros: tokensToMicros(
-      usage.cacheWriteTokens,
-      rates.cacheWritePerMTokUSD,
-    ),
-    costSource: "writer",
-  };
+export function computeCostMicros(usage: AssistantUsage): ReturnType<typeof storeComputeCostMicros> {
+  // The store's computeCostMicros accepts modelId: string | null | undefined,
+  // so passing usage.modelId directly (which is string | null) is safe.
+  return storeComputeCostMicros({
+    modelId: usage.modelId,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    cacheReadTokens: usage.cacheReadTokens,
+    cacheWriteTokens: usage.cacheWriteTokens,
+  });
 }

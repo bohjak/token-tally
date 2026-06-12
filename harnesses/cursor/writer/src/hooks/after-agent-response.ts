@@ -23,6 +23,7 @@ import {
   extractHarnessSessionId,
   computeHarnessMessageId,
 } from "../ids/synthesize.js";
+import { inferProvider } from "@token-tally/harness-kit";
 
 // ---------------------------------------------------------------------------
 // Handler
@@ -104,20 +105,3 @@ export async function handle(
   await writeSessionState(harnessSessionId, state);
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function inferProvider(modelId: string): string | null {
-  if (modelId.startsWith("claude-")) return "anthropic";
-  if (
-    modelId.startsWith("gpt-") ||
-    modelId.startsWith("o1-") ||
-    modelId.startsWith("o3-") ||
-    modelId.startsWith("o4-")
-  )
-    return "openai";
-  if (modelId.startsWith("gemini-")) return "google";
-  if (modelId.startsWith("grok-")) return "xai";
-  return null;
-}

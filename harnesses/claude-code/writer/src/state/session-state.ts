@@ -6,12 +6,11 @@
  * session gets a JSON file tracking the mapping to ToTally's internal IDs,
  * turn index, transcript read position, and in-flight tool calls.
  *
- * Writes use a tmp-then-rename pattern to ensure readers never observe a
- * partial file.
+ * IO is delegated to @token-tally/harness-kit's generic state-io helpers,
+ * which use pid-suffixed tmp files to avoid concurrent clobbering (m7 fix).
  */
 
-import { readFile, writeFile, rename, unlink, mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readJsonState, writeJsonState, deleteJsonState } from "@token-tally/harness-kit";
 import { sessionStateFile } from "./paths.js";
 
 // ---------------------------------------------------------------------------
@@ -21,10 +20,10 @@ import { sessionStateFile } from "./paths.js";
 /**
  * Persisted state for one active Claude Code session.
  *
- * This is written after every hook invocation that modifies state and read
- * at the start of every subsequent hook invocation in the same session.
+ * Written after every hook invocation that modifies state and read at the
+ * start of every subsequent hook invocation in the same session.
  */
-export interface SessionState {
+export type SessionState = {
   /** ToTally-internal UUID for the sessions row. */
   centralSessionId: string;
 
@@ -42,16 +41,14 @@ export interface SessionState {
 
   /**
    * Absolute path to the transcript file this offset is indexed against.
-   * When the incoming transcript_path differs from this value, drain.ts resets
-   * the offset to 0 so the new file is read from the beginning.
+   * When the incoming transcript_path differs, drain.ts resets the offset to 0.
    * Null on initial state (no drain has occurred yet).
    */
   transcriptPath: string | null;
 
   /**
    * Number of lines consumed from the transcript JSONL so far.
-   * Used as the `fromLine` argument to `readTranscriptFrom` to avoid
-   * re-processing entries already recorded.
+   * Used as `fromLine` to avoid re-processing already-recorded entries.
    */
   transcriptOffset: number;
 
@@ -72,7 +69,7 @@ export interface SessionState {
    * Keyed by the Claude Code tool_use_id.
    */
   activeTools: Record<string, { startedAt: number; toolName: string }>;
-}
+};
 
 // ---------------------------------------------------------------------------
 // Read
@@ -81,31 +78,17 @@ export interface SessionState {
 /**
  * Reads the state file for the given session ID.
  *
- * Returns `null` when:
+ * Returns null when:
  * - The file does not exist (ENOENT) — normal for the first hook of a session.
- * - The file exists but contains invalid JSON — logs a warning and returns null
- *   so the caller can recover rather than crash.
+ * - The file exists but contains invalid JSON — logs a warning and returns null.
  */
 export async function readSessionState(
   sessionId: string,
 ): Promise<SessionState | null> {
-  const path = sessionStateFile(sessionId);
-  let raw: string;
-  try {
-    raw = await readFile(path, "utf8");
-  } catch (err: unknown) {
-    if (isEnoent(err)) return null;
-    throw err;
-  }
-
-  try {
-    return JSON.parse(raw) as SessionState;
-  } catch {
-    console.warn(
-      `[claude-code-writer] state file for session ${sessionId} contains invalid JSON; discarding`,
-    );
-    return null;
-  }
+  return readJsonState<SessionState>(
+    sessionStateFile(sessionId),
+    "[claude-code-writer]",
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -115,19 +98,14 @@ export async function readSessionState(
 /**
  * Atomically writes `state` to the session state file.
  *
- * Uses a `.tmp` intermediate file and `fs.rename` so concurrent readers never
- * observe a partial write. Creates the state directory if it does not exist.
+ * Uses a pid-suffixed tmp file and `fs.rename` so concurrent readers never
+ * observe a partial write. Creates the state directory if needed.
  */
 export async function writeSessionState(
   sessionId: string,
   state: SessionState,
 ): Promise<void> {
-  const path = sessionStateFile(sessionId);
-  const tmp = `${path}.tmp`;
-
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(tmp, JSON.stringify(state), "utf8");
-  await rename(tmp, path);
+  return writeJsonState(sessionStateFile(sessionId), state);
 }
 
 // ---------------------------------------------------------------------------
@@ -136,28 +114,8 @@ export async function writeSessionState(
 
 /**
  * Deletes the state file for the given session ID.
- *
- * Best-effort: silently ignores ENOENT (file already gone is fine). Other
- * errors are re-thrown so they surface as unexpected failures.
+ * Silently ignores ENOENT; re-throws other errors.
  */
 export async function deleteSessionState(sessionId: string): Promise<void> {
-  const path = sessionStateFile(sessionId);
-  try {
-    await unlink(path);
-  } catch (err: unknown) {
-    if (isEnoent(err)) return;
-    throw err;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function isEnoent(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    (err as NodeJS.ErrnoException).code === "ENOENT"
-  );
+  return deleteJsonState(sessionStateFile(sessionId));
 }

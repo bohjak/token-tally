@@ -13,6 +13,7 @@
     "test": "node --test 'dist/tests/**/*.test.js'"
   },
   "dependencies": {
+    "@token-tally/harness-kit": "workspace:*",
     "@token-tally/store": "workspace:*"
   },
   "devDependencies": {

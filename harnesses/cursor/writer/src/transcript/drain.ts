@@ -23,6 +23,7 @@
  */
 
 import { readTranscriptEntries } from "./reader.js";
+import { inferProvider } from "@token-tally/harness-kit";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -319,23 +320,6 @@ function extractModelId(e: Record<string, unknown>): string | null {
   return null;
 }
 
-/**
- * Infer the provider name from a model id prefix.
- * Matches the same heuristic used in after-agent-response.ts.
- */
-function inferProvider(modelId: string): string | null {
-  if (modelId.startsWith("claude-")) return "anthropic";
-  if (
-    modelId.startsWith("gpt-") ||
-    modelId.startsWith("o1-") ||
-    modelId.startsWith("o3-") ||
-    modelId.startsWith("o4-")
-  )
-    return "openai";
-  if (modelId.startsWith("gemini-")) return "google";
-  if (modelId.startsWith("grok-")) return "xai";
-  return null;
-}
 
 /**
  * Safely convert an unknown value to a non-negative integer.

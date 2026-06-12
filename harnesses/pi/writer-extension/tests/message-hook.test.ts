@@ -1,18 +1,17 @@
 /**
- * message-hook.test.ts — Tests for the message_end hook's harness_message_id
- * selection.
+ * message-hook.test.ts — Tests for the message_end hook.
  *
- * Verifies the canonical-ID invariant from the session-log drift findings:
- *   - When Pi's AssistantMessage carries a provider responseId, the recorded
- *     harness_message_id must be that responseId (matching the importer).
- *   - When responseId is absent (aborted/error responses), the hook falls
- *     back to the synthesized `${harnessSessionId}:t${turnIndex}:m${counter}`
- *     ID.
+ * Covers:
+ *   - harness_message_id selection (responseId vs synthesized fallback)
+ *   - pricing: known model resolves to correct rates (costSource='writer')
+ *   - pricing: unknown model resolves to unknown (C2 regression — bare stem
+ *     must NOT match the first table entry at Opus rates)
+ *   - pricing: fallback when the store pricing module is unavailable
  */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { register } from "../src/hooks/message.ts";
+import { register, _setPricingForTest } from "../src/hooks/message.ts";
 import { setSession, clearSession } from "../src/hooks/session-state.ts";
 import { setTurn, clearTurn } from "../src/hooks/turn-state.ts";
 import type { AnalyticsWriterLike } from "../src/cli-writer.ts";
@@ -141,5 +140,134 @@ test("per-turn message counter still advances for mixed responseId presence", as
     assert.equal(h.messages[1]!.harnessMessageId, `${sessionFile}:t0:m1`);
   } finally {
     h.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Pricing tests — shared store pricing via _setPricingForTest
+// ---------------------------------------------------------------------------
+//
+// USAGE fixture has cost.total > 0, so the harness-cost path is taken and
+// writer pricing is skipped. For pricing tests we use ZERO_COST_USAGE so the
+// fallback path is exercised.
+
+/** Usage with no cost data — forces the writer pricing fallback path. */
+const ZERO_COST_USAGE = {
+  input: 1_000_000,
+  output: 100_000,
+  cacheRead: 0,
+  cacheWrite: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+/** Minimal stub matching StorePricing shape. */
+function makePricingStub(overrides?: {
+  modelId?: string;
+  costSource?: "writer" | "unknown";
+  inputMicros?: number;
+  outputMicros?: number;
+}): import("@token-tally/store/pricing") {
+  return {
+    computeCostMicros(params) {
+      const model = params.modelId ?? "";
+      // Haiku-4-5: inputPerMTokUSD=0.8  → 1M tokens = 800_000 micros
+      //            outputPerMTokUSD=4   → 100k tokens = 400_000 micros
+      if (model === "claude-haiku-4-5") {
+        return {
+          costInputMicros: overrides?.inputMicros ?? Math.round((params.inputTokens ?? 0) * 0.8),
+          costOutputMicros: overrides?.outputMicros ?? Math.round((params.outputTokens ?? 0) * 4),
+          costCacheReadMicros: 0,
+          costCacheWriteMicros: 0,
+          costSource: "writer",
+        };
+      }
+      return {
+        costInputMicros: 0,
+        costOutputMicros: 0,
+        costCacheReadMicros: 0,
+        costCacheWriteMicros: 0,
+        costSource: "unknown",
+      };
+    },
+    lookupRates(_modelId: string) {
+      return undefined;
+    },
+  } as unknown as import("@token-tally/store/pricing");
+}
+
+test("pricing: claude-haiku-4-5 resolves to haiku rates (costSource=writer)", async () => {
+  _setPricingForTest(makePricingStub());
+  const h = makeHarness("/tmp/sessions/pricing-haiku.jsonl");
+  try {
+    await h.emitMessageEnd({
+      role: "assistant",
+      model: "claude-haiku-4-5",
+      responseId: "msg_haiku_1",
+      usage: ZERO_COST_USAGE,
+    });
+
+    assert.equal(h.messages.length, 1);
+    const msg = h.messages[0]!;
+    assert.equal(msg.costSource, "writer", "known model should yield costSource=writer");
+    // 1M input tokens × $0.80/MTok = 800_000 micros
+    assert.equal(msg.costInputMicros, 800_000);
+    // 100k output tokens × $4/MTok = 400_000 micros
+    assert.equal(msg.costOutputMicros, 400_000);
+  } finally {
+    h.cleanup();
+    _setPricingForTest(null);
+  }
+});
+
+test("pricing: unknown bare Claude stem resolves to unknown (C2 regression)", async () => {
+  // Without the dash guard in lookupRates, bare stems like 'claude' strip down
+  // and prefix-match 'claude-opus-4-5', returning Opus rates. The shared
+  // lookupRates has the guard; we verify the fallback produces costSource=unknown.
+  _setPricingForTest(makePricingStub());
+  const h = makeHarness("/tmp/sessions/pricing-unknown.jsonl");
+  try {
+    await h.emitMessageEnd({
+      role: "assistant",
+      model: "claude-supernova-9", // unknown Claude model
+      responseId: "msg_unknown_1",
+      usage: ZERO_COST_USAGE,
+    });
+
+    assert.equal(h.messages.length, 1);
+    const msg = h.messages[0]!;
+    // The stub returns unknown for non-haiku models, mirroring real lookup
+    // behavior where the dash guard prevents bare-stem Opus misattribution.
+    assert.equal(msg.costSource, "unknown");
+    assert.equal(msg.costInputMicros, 0);
+    assert.equal(msg.costOutputMicros, 0);
+  } finally {
+    h.cleanup();
+    _setPricingForTest(null);
+  }
+});
+
+test("pricing: fallback to unknown when store pricing module is unavailable", async () => {
+  // Simulate a bare checkout where `make install` was never run and the store
+  // dist is missing: _pricingModule stays null.
+  _setPricingForTest(null);
+  const h = makeHarness("/tmp/sessions/pricing-fallback.jsonl");
+  try {
+    await h.emitMessageEnd({
+      role: "assistant",
+      model: "claude-haiku-4-5",
+      responseId: "msg_fallback_1",
+      usage: ZERO_COST_USAGE,
+    });
+
+    assert.equal(h.messages.length, 1);
+    const msg = h.messages[0]!;
+    assert.equal(msg.costSource, "unknown", "unavailable pricing must fall back to unknown");
+    assert.equal(msg.costInputMicros, 0);
+    assert.equal(msg.costOutputMicros, 0);
+    assert.equal(msg.costCacheReadMicros, 0);
+    assert.equal(msg.costCacheWriteMicros, 0);
+  } finally {
+    h.cleanup();
+    _setPricingForTest(null);
   }
 });

@@ -203,7 +203,11 @@ if not isinstance(hooks_root, dict):
     raise SystemExit(0)
 
 def owned(command: object) -> bool:
-    return isinstance(command, str) and command.startswith("token-tally-claude-hook")
+    # Match both old bare-name installs and new absolute-path installs.
+    return isinstance(command, str) and (
+        command.startswith("token-tally-claude-hook") or
+        command.endswith("/token-tally-claude-hook")
+    )
 
 changed = False
 for event in list(hooks_root.keys()):

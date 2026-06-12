@@ -17,8 +17,10 @@
  * should not call either function — they rely on the daemon for background
  * persistence.
  *
- * Ingestion writes through `AnalyticsWriter` so all idempotency, FK, and
- * schema-version rules are enforced automatically.
+ * Ingestion now uses `writer.drainRecords()` — the same canonical drain engine
+ * used by the writer-internal drain paths. This ensures T10 legacy cross-file
+ * spool-ID repair is applied uniformly: the same `.closed` file produces the
+ * same result regardless of which code path drains it.
  */
 
 import { existsSync, readFileSync, readdirSync, renameSync, unlinkSync } from "fs";
@@ -167,7 +169,9 @@ export async function ingestFile(
       .split("\n")
       .filter((line) => line.trim() !== "");
     const records = lines.map((line) => JSON.parse(line) as SpoolRecord);
-    await applyRecordsToWriter(writer, records);
+    // Use the canonical drain engine — same path as writer-internal drain.
+    // T10 legacy cross-file spool-ID repair is applied here.
+    writer.drainRecords(records);
     unlinkSync(targetPath);
     ingested = 1;
   } catch (err) {
@@ -227,10 +231,10 @@ export async function ingestFile(
  *
  * ## T10 legacy repair
  *
- * Each file is processed via `applyRecordsToWriter`, which includes the legacy
- * synthetic spool ID repair logic. This is the same path used by `ingestFile`
- * and ensures cross-file synthetic `spool:*` IDs are resolved (or quarantined
- * with a clear error) rather than failing with a silent FK constraint.
+ * Each file is processed via `writer.drainRecords()`, which uses the canonical
+ * `drainBatch` engine from `drain-engine.ts`. This includes T10 legacy
+ * synthetic spool-ID repair and ensures cross-file `spool:*` IDs are resolved
+ * (or quarantined with a clear error) rather than failing with an FK constraint.
  */
 export async function ingestDir(
   dir?: string,
@@ -264,7 +268,7 @@ export async function ingestDir(
 
   // Open the writer ONCE for the whole batch — one DB open/close per ingestDir
   // call regardless of file count. No drain-on-open: we process files manually
-  // using applyRecordsToWriter so T10 legacy repair applies to every file.
+  // using writer.drainRecords() so T10 legacy repair applies to every file.
   const writer = await AnalyticsWriter.open({
     dbPath: options?.dbPath,
     harnessName: options?.harnessName ?? "token-tally-ingest",
@@ -318,7 +322,8 @@ export async function ingestDir(
       const records = lines.map((line) => JSON.parse(line) as SpoolRecord);
       // Capture first record for quarantine metadata even if drain fails.
       firstRecord = records[0] ?? null;
-      await applyRecordsToWriter(writer, records);
+      // Use the canonical drain engine — same path as writer-internal drain.
+      writer.drainRecords(records);
       unlinkSync(filePath);
       ingested++;
     } catch (err) {
@@ -356,369 +361,4 @@ export async function ingestDir(
   await writer.close();
 
   return { ingested, skipped: activeFiles.length, skippedByBound, quarantined, errors };
-}
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-// UUID pattern used to detect Case-1 legacy turn IDs (spool:<uuid>:<harnessTurnId>).
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/**
- * Parses a legacy synthetic session spool ID back to its natural key.
- *
- * Format: `spool:<harnessId>:<harnessSessionId>`
- *
- * Used by the T10 legacy repair path: when a turn or child record was written
- * to the emergency spool in a different file than its parent session record,
- * the session ID is a synthetic placeholder (`spool:<harnessId>:<path>`) rather
- * than a real DB UUID. This function extracts the natural key so the repair
- * logic can synthesize or look up the parent session row.
- *
- * Returns null for non-spool IDs, malformed IDs, or IDs where harnessId looks
- * suspicious (contains path separators — it should be a simple slug).
- */
-function parseLegacySpoolSessionId(
-  id: string,
-): { harnessId: string; harnessSessionId: string } | null {
-  if (!id.startsWith('spool:')) return null;
-  const body = id.slice(6); // strip 'spool:'
-  const colonIdx = body.indexOf(':');
-  if (colonIdx <= 0) return null;
-  const harnessId = body.slice(0, colonIdx);
-  const harnessSessionId = body.slice(colonIdx + 1);
-  if (!harnessSessionId) return null;
-  // harnessId must be a simple identifier — no path separators.
-  if (harnessId.includes('/') || harnessId.includes('\\')) return null;
-  return { harnessId, harnessSessionId };
-}
-
-/**
- * Parses a legacy synthetic turn spool ID back to its natural key.
- *
- * Two formats exist in the legacy emergency-spool backlog:
- *
- *   Case 1 — UUID-prefixed (session was already in the DB at write time):
- *     `spool:<uuid>:<harnessTurnId>`
- *
- *   Case 2 — Nested synthetic (session was also in a different spool file):
- *     `spool:spool:<harnessId>:<path>:<path>:t<N>`
- *     The path segment is duplicated because the legacy writer used it as both
- *     the harnessSessionId and the base of the harnessTurnId (`<path>:t<N>`).
- *
- * Returns null when the ID cannot be parsed deterministically. The caller
- * should let these propagate to the quarantine path rather than guessing.
- */
-function parseLegacySpoolTurnId(
-  id: string,
-): { sessionId: string; harnessTurnId: string } | null {
-  if (!id.startsWith('spool:')) return null;
-  const body = id.slice(6); // strip outer 'spool:'
-
-  // Case 1: UUID-prefixed.
-  // The session UUID is exactly 36 chars; the 37th char must be ':'.
-  if (body.length > 36 && body[36] === ':') {
-    const candidate = body.slice(0, 36);
-    if (UUID_RE.test(candidate)) {
-      const harnessTurnId = body.slice(37);
-      if (harnessTurnId) return { sessionId: candidate, harnessTurnId };
-    }
-  }
-
-  // Case 2: Nested synthetic session ID.
-  // body = "spool:<harnessId>:<path>:<path>:t<N>"
-  // (the path appears twice because of how the legacy writer formed the key)
-  if (body.startsWith('spool:')) {
-    const innerBody = body.slice(6); // strip inner 'spool:'
-    const harnessColonIdx = innerBody.indexOf(':');
-    if (harnessColonIdx <= 0) return null;
-    const harnessId = innerBody.slice(0, harnessColonIdx);
-    // harnessId must be a simple identifier — no path separators.
-    if (harnessId.includes('/') || harnessId.includes('\\')) return null;
-    const afterHarnessId = innerBody.slice(harnessColonIdx + 1);
-    // afterHarnessId = "<path>:<path>:t<N>"
-    const tMatch = afterHarnessId.match(/:t(\d+)$/);
-    if (tMatch == null) return null;
-    const beforeT = afterHarnessId.slice(0, afterHarnessId.length - tMatch[0].length);
-    // beforeT = "<path>:<path>" — path appears twice, separated by exactly one ':'
-    const pathColonIdx = beforeT.indexOf(':');
-    if (pathColonIdx <= 0) return null;
-    const path1 = beforeT.slice(0, pathColonIdx);
-    const path2 = beforeT.slice(pathColonIdx + 1);
-    // Validate the path-repetition invariant before trusting the parse.
-    if (path1 !== path2) return null;
-    const sessionId = `spool:${harnessId}:${path1}`;
-    const harnessTurnId = `${path1}:t${tMatch[1]!}`;
-    return { sessionId, harnessTurnId };
-  }
-
-  return null;
-}
-
-/**
- * Applies a batch of SpoolRecords to a live AnalyticsWriter.
- *
- * Records are applied in order. All writes use the writer's idempotent upsert
- * semantics so replaying the same records is always safe. Errors propagate to
- * the caller so the drain loop can mark the file as failed.
- *
- * ## Legacy cross-file ID repair (T10)
- *
- * New multi-record Pi spool files contain session, turn, and child records in
- * lifecycle order within a single file. The in-file `sessionIds`/`turnIds` maps
- * resolve synthetic `spool:*` placeholders to real DB UUIDs as records are
- * processed top-to-bottom.
- *
- * Legacy emergency spool files contain ONE record per file. Child records
- * (llm-message, tool-call) reference turn and session rows that live in
- * separate files, so the in-file maps cannot resolve them. For these records
- * the function falls back to natural-key-first repair:
- *
- *   Session: `spool:<harnessId>:<harnessSessionId>` — the harnessId and
- *     harnessSessionId are parsed out and passed to `writer.recordSession()`
- *     with `startedAt = 0` as a sentinel. The upsert SQL uses
- *     `COALESCE(NULLIF(0, 0), existing)` so an existing timestamp is preserved;
- *     a new row gets `startedAt = 0` as a placeholder marking it as synthesized.
- *
- *   Turn: `spool:<uuid>:<harnessTurnId>` (UUID-prefixed) or
- *     `spool:spool:<harnessId>:<path>:<path>:t<N>` (nested synthetic) — the
- *     natural key `(sessionId, harnessTurnId)` is extracted and
- *     `writer.recordTurn()` is called with `startedAt = 0`.
- *
- * If a synthetic ID cannot be parsed deterministically, it is passed through
- * unchanged; the FK constraint fires, and the file is quarantined with a clear
- * error that includes the underlying DB error.
- */
-async function applyRecordsToWriter(
-  writer: AnalyticsWriter,
-  records: SpoolRecord[]
-): Promise<void> {
-  // Session/turn/subscription IDs that come out of spool mode are synthetic
-  // placeholders (prefix "spool:"). Map them to real DB IDs as we process
-  // parent rows first. The maps also cache cross-file repair results so each
-  // unique synthetic ID is resolved at most once per drain pass.
-  const sessionIds = new Map<string, string>();
-  const turnIds = new Map<string, string>();
-  const subscriptionIds = new Map<string, string>();
-
-  for (const record of records) {
-    switch (record.type) {
-      case "harness":
-        await writer.recordHarness(record.payload);
-        break;
-
-      case "session": {
-        const result = await writer.recordSession(record.payload);
-        // Map the in-file spool placeholder to the real UUID.
-        const spoolKey = `spool:${record.payload.harnessId}:${record.payload.harnessSessionId}`;
-        sessionIds.set(spoolKey, result.id);
-        break;
-      }
-
-      case "turn": {
-        let resolvedSessionId = sessionIds.get(record.payload.sessionId) ?? record.payload.sessionId;
-
-        // Legacy cross-file repair: if the sessionId is still a synthetic
-        // spool:* placeholder (not resolved by an in-file session record),
-        // synthesize or look up the parent session via its natural key.
-        if (resolvedSessionId.startsWith('spool:')) {
-          const parsed = parseLegacySpoolSessionId(resolvedSessionId);
-          if (parsed != null) {
-            // Ensure the harness row exists (session has a FK to harnesses).
-            await writer.recordHarness({ name: parsed.harnessId, displayName: parsed.harnessId });
-            const { id } = await writer.recordSession({
-              harnessId: parsed.harnessId,
-              harnessSessionId: parsed.harnessSessionId,
-              sessionFile: parsed.harnessSessionId,
-              startedAt: 0, // sentinel: preserves existing timestamp via COALESCE
-            });
-            sessionIds.set(resolvedSessionId, id);
-            resolvedSessionId = id;
-          }
-          // If still synthetic after repair attempt: throw explicitly so this
-          // file is quarantined rather than silently passing through.
-          // The writer's withDbOrSpool would catch FK errors and fall back to
-          // spool, which hides the failure and deletes the source file.
-          if (resolvedSessionId.startsWith('spool:')) {
-            throw new Error(
-              `Cannot resolve synthetic session ID '${resolvedSessionId}': ` +
-              `the natural key could not be parsed (harnessId appears to ` +
-              `contain path separators or the format is unrecognised). ` +
-              `Record quarantined for manual inspection.`
-            );
-          }
-        }
-
-        const payload = { ...record.payload, sessionId: resolvedSessionId };
-        const result = await writer.recordTurn(payload);
-        const spoolKey = `spool:${record.payload.sessionId}:${record.payload.harnessTurnId}`;
-        turnIds.set(spoolKey, result.id);
-        break;
-      }
-
-      case "llm-message": {
-        let resolvedSessionId = sessionIds.get(record.payload.sessionId) ?? record.payload.sessionId;
-        let resolvedTurnId = record.payload.turnId != null
-          ? (turnIds.get(record.payload.turnId) ?? record.payload.turnId)
-          : undefined;
-
-        // Legacy cross-file repair: if turnId is still a synthetic spool:*
-        // placeholder, synthesize or look up the parent turn via natural key.
-        if (resolvedTurnId != null && resolvedTurnId.startsWith('spool:')) {
-          const parsed = parseLegacySpoolTurnId(resolvedTurnId);
-          if (parsed != null) {
-            // Resolve the turn's parent session first (may itself be synthetic).
-            let parsedSessionId = sessionIds.get(parsed.sessionId) ?? parsed.sessionId;
-            if (parsedSessionId.startsWith('spool:')) {
-              const parsedSess = parseLegacySpoolSessionId(parsedSessionId);
-              if (parsedSess != null) {
-                await writer.recordHarness({ name: parsedSess.harnessId, displayName: parsedSess.harnessId });
-                const { id } = await writer.recordSession({
-                  harnessId: parsedSess.harnessId,
-                  harnessSessionId: parsedSess.harnessSessionId,
-                  sessionFile: parsedSess.harnessSessionId,
-                  startedAt: 0,
-                });
-                sessionIds.set(parsedSessionId, id);
-                parsedSessionId = id;
-              }
-            }
-            const { id: turnId } = await writer.recordTurn({
-              harnessId: record.payload.harnessId,
-              sessionId: parsedSessionId,
-              harnessTurnId: parsed.harnessTurnId,
-              startedAt: 0,
-            });
-            turnIds.set(resolvedTurnId, turnId);
-            resolvedTurnId = turnId;
-          }
-          // If still synthetic after repair attempt: throw so the file is
-          // quarantined rather than silently re-spooling the record.
-          if (resolvedTurnId.startsWith('spool:')) {
-            throw new Error(
-              `Cannot resolve synthetic turn ID '${resolvedTurnId}': ` +
-              `the natural key could not be parsed (format is unrecognised or the ` +
-              `path/harnessSessionId repeat invariant was not satisfied). ` +
-              `Record quarantined for manual inspection.`
-            );
-          }
-        }
-
-        // Re-resolve sessionId: it may have been synthesised during turn repair
-        // (the turn's parent session is now in the sessionIds map).
-        resolvedSessionId = sessionIds.get(record.payload.sessionId) ?? resolvedSessionId;
-
-        // Legacy repair for the message's own sessionId if still synthetic.
-        if (resolvedSessionId.startsWith('spool:')) {
-          const parsedSess = parseLegacySpoolSessionId(resolvedSessionId);
-          if (parsedSess != null) {
-            await writer.recordHarness({ name: parsedSess.harnessId, displayName: parsedSess.harnessId });
-            const { id } = await writer.recordSession({
-              harnessId: parsedSess.harnessId,
-              harnessSessionId: parsedSess.harnessSessionId,
-              sessionFile: parsedSess.harnessSessionId,
-              startedAt: 0,
-            });
-            sessionIds.set(resolvedSessionId, id);
-            resolvedSessionId = id;
-          }
-        }
-
-        const resolvedSubscriptionId = record.payload.subscriptionId != null
-          ? (subscriptionIds.get(record.payload.subscriptionId) ?? record.payload.subscriptionId)
-          : undefined;
-
-        await writer.recordLlmMessage({
-          ...record.payload,
-          sessionId: resolvedSessionId,
-          turnId: resolvedTurnId,
-          subscriptionId: resolvedSubscriptionId,
-        });
-        break;
-      }
-
-      case "subscription": {
-        const result = await writer.recordSubscription(record.payload);
-        const spoolKey = `spool:${record.payload.harnessId}:${record.payload.planName}:${record.payload.periodStart}`;
-        subscriptionIds.set(spoolKey, result.id);
-        break;
-      }
-
-      case "tool-call": {
-        let resolvedSessionId = sessionIds.get(record.payload.sessionId) ?? record.payload.sessionId;
-        let resolvedTurnId = record.payload.turnId != null
-          ? (turnIds.get(record.payload.turnId) ?? record.payload.turnId)
-          : undefined;
-
-        // Legacy cross-file repair: same pattern as llm-message above.
-        if (resolvedTurnId != null && resolvedTurnId.startsWith('spool:')) {
-          const parsed = parseLegacySpoolTurnId(resolvedTurnId);
-          if (parsed != null) {
-            let parsedSessionId = sessionIds.get(parsed.sessionId) ?? parsed.sessionId;
-            if (parsedSessionId.startsWith('spool:')) {
-              const parsedSess = parseLegacySpoolSessionId(parsedSessionId);
-              if (parsedSess != null) {
-                await writer.recordHarness({ name: parsedSess.harnessId, displayName: parsedSess.harnessId });
-                const { id } = await writer.recordSession({
-                  harnessId: parsedSess.harnessId,
-                  harnessSessionId: parsedSess.harnessSessionId,
-                  sessionFile: parsedSess.harnessSessionId,
-                  startedAt: 0,
-                });
-                sessionIds.set(parsedSessionId, id);
-                parsedSessionId = id;
-              }
-            }
-            const { id: turnId } = await writer.recordTurn({
-              harnessId: record.payload.harnessId,
-              sessionId: parsedSessionId,
-              harnessTurnId: parsed.harnessTurnId,
-              startedAt: 0,
-            });
-            turnIds.set(resolvedTurnId, turnId);
-            resolvedTurnId = turnId;
-          }
-          // Same as llm-message: throw if still synthetic after repair attempt.
-          if (resolvedTurnId.startsWith('spool:')) {
-            throw new Error(
-              `Cannot resolve synthetic turn ID '${resolvedTurnId}': ` +
-              `the natural key could not be parsed. ` +
-              `Record quarantined for manual inspection.`
-            );
-          }
-        }
-
-        // Re-resolve sessionId (same pattern as llm-message).
-        resolvedSessionId = sessionIds.get(record.payload.sessionId) ?? resolvedSessionId;
-
-        // Legacy repair for the tool-call's own sessionId if still synthetic.
-        if (resolvedSessionId.startsWith('spool:')) {
-          const parsedSess = parseLegacySpoolSessionId(resolvedSessionId);
-          if (parsedSess != null) {
-            await writer.recordHarness({ name: parsedSess.harnessId, displayName: parsedSess.harnessId });
-            const { id } = await writer.recordSession({
-              harnessId: parsedSess.harnessId,
-              harnessSessionId: parsedSess.harnessSessionId,
-              sessionFile: parsedSess.harnessSessionId,
-              startedAt: 0,
-            });
-            sessionIds.set(resolvedSessionId, id);
-            resolvedSessionId = id;
-          }
-        }
-
-        await writer.recordToolCall({
-          ...record.payload,
-          sessionId: resolvedSessionId,
-          turnId: resolvedTurnId,
-        });
-        break;
-      }
-
-      case "raw-event":
-        await writer.recordRawEvent(record.payload);
-        break;
-    }
-  }
 }

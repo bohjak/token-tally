@@ -89,25 +89,22 @@ export async function handle(
   };
   await writeSessionState(payload.session_id, state);
 
-  // ── 5. Fire-and-forget git capture ───────────────────────────────────────
-  // Do not await — git metadata is best-effort and must not delay the hook.
-  // The store upsert on (harness_id, harness_session_id) is idempotent, so
-  // this second recordSession call safely patches in the repo fields once
-  // the git subprocess completes.
-  captureRepoSnapshot(payload.cwd)
-    .then(async (snapshot) => {
-      if (snapshot === null) return;
-      await writer.recordSession({
-        harnessId: "claude-code",
-        harnessSessionId: payload.session_id,
-        cwd: payload.cwd,
-        startedAt: Date.now(),
-        repoOwner: snapshot.repoOwner ?? undefined,
-        repoName: snapshot.repoName ?? undefined,
-        repoRemote: snapshot.repoRemote ?? undefined,
-      });
-    })
-    .catch(() => {
-      // Best-effort: a failure here must never surface to the caller.
+  // ── 5. Await git capture (M7 fix) ──────────────────────────────────────────
+  // Previously fire-and-forget: the hook process could exit before git finished,
+  // losing repo metadata. We now await so the capture completes before close().
+  // captureRepoSnapshot is bounded by GIT_TIMEOUT_MS; if the outer
+  // DISPATCH_TIMEOUT_MS fires first, this await is abandoned — that is
+  // acceptable for the >3s case, but the common (<1s) case now succeeds.
+  const snapshot = await captureRepoSnapshot(payload.cwd).catch(() => null);
+  if (snapshot !== null) {
+    await writer.recordSession({
+      harnessId: "claude-code",
+      harnessSessionId: payload.session_id,
+      cwd: payload.cwd,
+      startedAt: Date.now(),
+      repoOwner: snapshot.repoOwner ?? undefined,
+      repoName: snapshot.repoName ?? undefined,
+      repoRemote: snapshot.repoRemote ?? undefined,
     });
+  }
 }

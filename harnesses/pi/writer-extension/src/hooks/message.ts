@@ -11,9 +11,10 @@
  * store schema.
  *
  * When Pi provides a non-zero cost total, cost_source is "harness".
- * When Pi emits no cost (zero or missing total), we fall back to the local
- * pricing table via computeCostMicros(): cost_source becomes "writer" when
- * rates are found, or "unknown" when the model is not in the table.
+ * When Pi emits no cost (zero or missing total), we fall back to the shared
+ * @token-tally/store/pricing module: cost_source becomes "writer" when rates
+ * are found, or "unknown" when the model is not in the table or the pricing
+ * module is unavailable (e.g. a bare checkout without `make install`).
  *
  * ## Message ID selection
  * Pi's AssistantMessage carries the provider response ID (`responseId`,
@@ -73,53 +74,44 @@ type PiMessageEndEvent = {
   };
 };
 
-type LocalRates = {
-  inputPerMTokUSD: number;
-  outputPerMTokUSD: number;
-  cacheReadPerMTokUSD: number;
-  cacheWritePerMTokUSD: number;
-};
+// ---------------------------------------------------------------------------
+// Shared pricing module — dynamically imported to avoid loading better-sqlite3
+// ---------------------------------------------------------------------------
+//
+// Pi's extension process must not import @token-tally/store at the top level
+// because that package loads native SQLite code. The pricing subpath
+// (@token-tally/store/pricing) is dependency-free, but dynamic import is still
+// used so that even a partial checkout (no `make install`, store not built)
+// never crashes the extension — it just falls back to costSource='unknown'.
 
-type LocalCostBreakdown = {
-  costInputMicros: number;
-  costOutputMicros: number;
-  costCacheReadMicros: number;
-  costCacheWriteMicros: number;
-  costSource: "writer" | "unknown";
-};
+type StorePricing = typeof import("@token-tally/store/pricing");
 
-const LOCAL_RATES: Array<{ id: string; aliases: string[]; rates: LocalRates }> = [
-  {
-    id: "claude-opus-4-5",
-    aliases: ["claude-opus-4"],
-    rates: {
-      inputPerMTokUSD: 15,
-      outputPerMTokUSD: 75,
-      cacheReadPerMTokUSD: 1.5,
-      cacheWritePerMTokUSD: 18.75,
-    },
-  },
-  {
-    id: "claude-sonnet-4-5",
-    aliases: ["claude-sonnet-4"],
-    rates: {
-      inputPerMTokUSD: 3,
-      outputPerMTokUSD: 15,
-      cacheReadPerMTokUSD: 0.3,
-      cacheWritePerMTokUSD: 3.75,
-    },
-  },
-  {
-    id: "claude-haiku-4-5",
-    aliases: ["claude-haiku-4"],
-    rates: {
-      inputPerMTokUSD: 0.8,
-      outputPerMTokUSD: 4,
-      cacheReadPerMTokUSD: 0.08,
-      cacheWritePerMTokUSD: 1,
-    },
-  },
-];
+// Mutable slot updated by the load promise. Exported for test injection only.
+export let _pricingModule: StorePricing | null = null;
+
+// Mutable promise — awaited in the handler before checking _pricingModule.
+// Replaced by _setPricingForTest to cancel any in-flight real import so tests
+// are not subject to a race between the injected value and the async import.
+export let _pricingLoadPromise: Promise<void> = import("@token-tally/store/pricing")
+  .then((m) => {
+    _pricingModule = m;
+  })
+  .catch(() => {
+    // Store dist not available (e.g. bare checkout without `make install`).
+    // _pricingModule stays null; we'll fall back to costSource='unknown'.
+  });
+
+/**
+ * Inject a pricing module for testing without relying on real dynamic imports.
+ * Also replaces the load promise with an already-resolved one so the real
+ * async import cannot race against and overwrite the injected value.
+ *
+ * Only for test use — do not call in production code.
+ */
+export function _setPricingForTest(m: StorePricing | null): void {
+  _pricingModule = m;
+  _pricingLoadPromise = Promise.resolve();
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -139,66 +131,6 @@ function safeNum(value: number | undefined | null): number {
  */
 function toMicros(usd: number): number {
   return Math.round(usd * 1_000_000);
-}
-
-function tokensToMicros(tokens: number, ratePerMTokUSD: number): number {
-  return Math.round(tokens * ratePerMTokUSD);
-}
-
-function zeroCostBreakdown(): LocalCostBreakdown {
-  return {
-    costInputMicros: 0,
-    costOutputMicros: 0,
-    costCacheReadMicros: 0,
-    costCacheWriteMicros: 0,
-    costSource: "unknown",
-  };
-}
-
-function lookupLocalRates(modelId: string): LocalRates | null {
-  let candidate = modelId;
-
-  while (candidate.length > 0) {
-    for (const entry of LOCAL_RATES) {
-      if (entry.id === candidate || entry.aliases.includes(candidate)) {
-        return entry.rates;
-      }
-      if (entry.id.startsWith(`${candidate}-`)) {
-        return entry.rates;
-      }
-    }
-
-    const lastDash = candidate.lastIndexOf("-");
-    if (lastDash === -1) break;
-    candidate = candidate.slice(0, lastDash);
-  }
-
-  return null;
-}
-
-function computeLocalCostMicros(params: {
-  modelId: string | null;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-}): LocalCostBreakdown {
-  if (params.modelId == null) {
-    return zeroCostBreakdown();
-  }
-
-  const rates = lookupLocalRates(params.modelId);
-  if (rates == null) {
-    return zeroCostBreakdown();
-  }
-
-  return {
-    costInputMicros: tokensToMicros(params.inputTokens, rates.inputPerMTokUSD),
-    costOutputMicros: tokensToMicros(params.outputTokens, rates.outputPerMTokUSD),
-    costCacheReadMicros: tokensToMicros(params.cacheReadTokens, rates.cacheReadPerMTokUSD),
-    costCacheWriteMicros: tokensToMicros(params.cacheWriteTokens, rates.cacheWritePerMTokUSD),
-    costSource: "writer",
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -269,8 +201,8 @@ export function register(pi: PiAPIStub, writer: AnalyticsWriterLike): void {
       const cacheWriteTokens = safeNum(usage?.cacheWrite);
 
       // Prefer Pi's emitted cost when it is non-zero (cost_source = "harness").
-      // When Pi reports no cost (missing or zero total), fall back to the local
-      // pricing table via computeCostMicros (cost_source = "writer" or "unknown").
+      // When Pi reports no cost (missing or zero total), fall back to the shared
+      // store pricing module (cost_source = "writer" or "unknown").
       let costInputMicros: number;
       let costOutputMicros: number;
       let costCacheReadMicros: number;
@@ -285,23 +217,34 @@ export function register(pi: PiAPIStub, writer: AnalyticsWriterLike): void {
         costCacheWriteMicros = toMicros(safeNum(cost?.cacheWrite));
         costSource = "harness";
       } else {
-        // Pi did not emit cost data — compute from a small built-in pricing
-        // table. Keep this local to avoid importing @token-tally/store at
-        // runtime in Pi's Node process (that package loads native SQLite code).
-        const breakdown = computeLocalCostMicros({
-          modelId: typeof msg.model === "string" && msg.model.length > 0
-            ? msg.model
-            : null,
-          inputTokens,
-          outputTokens,
-          cacheReadTokens,
-          cacheWriteTokens,
-        });
-        costInputMicros = breakdown.costInputMicros;
-        costOutputMicros = breakdown.costOutputMicros;
-        costCacheReadMicros = breakdown.costCacheReadMicros;
-        costCacheWriteMicros = breakdown.costCacheWriteMicros;
-        costSource = breakdown.costSource; // "writer" | "unknown"
+        // Pi did not emit cost data. Await the shared pricing module
+        // (@token-tally/store/pricing, which is dependency-free). If it's not
+        // available, all costs fall back to 0 / costSource='unknown'.
+        await _pricingLoadPromise;
+        const modelId = typeof msg.model === "string" && msg.model.length > 0
+          ? msg.model
+          : undefined;
+        if (_pricingModule !== null && modelId !== undefined) {
+          const breakdown = _pricingModule.computeCostMicros({
+            modelId,
+            inputTokens,
+            outputTokens,
+            cacheReadTokens,
+            cacheWriteTokens,
+          });
+          costInputMicros = breakdown.costInputMicros;
+          costOutputMicros = breakdown.costOutputMicros;
+          costCacheReadMicros = breakdown.costCacheReadMicros;
+          costCacheWriteMicros = breakdown.costCacheWriteMicros;
+          costSource = breakdown.costSource; // "writer" | "unknown"
+        } else {
+          // Pricing unavailable or no model ID — record zero costs.
+          costInputMicros = 0;
+          costOutputMicros = 0;
+          costCacheReadMicros = 0;
+          costCacheWriteMicros = 0;
+          costSource = "unknown";
+        }
       }
 
       await writer.recordLlmMessage({

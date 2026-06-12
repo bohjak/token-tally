@@ -1,15 +1,15 @@
 /**
  * paths.ts — Filesystem locations for per-session Claude Code writer state.
  *
- * State files track in-progress session data across hook invocations, which
- * run as separate short-lived processes. Each session gets its own JSON file
- * named by the Claude Code session ID.
- *
  * Directory: ${XDG_STATE_HOME:-~/.local/state}/token-tally/claude-code/
+ *
+ * Session IDs are sanitized via sanitizeIdForFilename to prevent path
+ * traversal when raw harness IDs contain slashes or other unsafe chars (m6).
  */
 
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { sanitizeIdForFilename } from "@token-tally/harness-kit";
 
 /**
  * Returns the directory where per-session state files are stored.
@@ -22,7 +22,10 @@ export function claudeCodeStateDir(): string {
 
 /**
  * Returns the full path for a specific session's state file.
+ *
+ * The session ID is sanitized before use as a filename component to prevent
+ * path traversal when raw harness IDs contain slashes or other unsafe chars.
  */
 export function sessionStateFile(sessionId: string): string {
-  return join(claudeCodeStateDir(), `${sessionId}.json`);
+  return join(claudeCodeStateDir(), `${sanitizeIdForFilename(sessionId)}.json`);
 }

@@ -139,7 +139,7 @@ CREATE TABLE subscriptions (
 | `plan_name` | Writer-defined slug: `claude-pro`, `claude-max-20x`, `cursor-pro`. Not an enum at the schema level. |
 | `period_start` / `period_end` | Unix ms boundaries of the billing period. Writers update `period_end` and `quota_used` as the period progresses. |
 | `fixed_cost` | Flat fee for this period in `currency`. |
-| `quota_limit` / `quota_used` / `quota_unit` | Optional quota counter. Tray renders `"{used} / {limit} {unit}"` verbatim — no per-plan display logic needed. |
+| `quota_limit` / `quota_used` / `quota_unit` | Optional quota counter. Intended rendering for future reader support (`"{used} / {limit} {unit}"`); no reader currently displays subscriptions. |
 
 This table is created before `llm_messages` because `llm_messages` has a FK to `subscriptions(id)`.
 
@@ -326,6 +326,8 @@ Enable per harness via `~/.config/token-tally/config.json`:
 
 This table is intentionally self-contained (no outgoing FKs to structured tables) so it can be split to a separate `raw.db` file cheaply if volume demands it.
 
+**Delivery guarantee: at-least-once.** The drain engine commits all records in a file then deletes the file. If a crash occurs between the commit and the `unlink`, the file is re-drained on the next pass. Structured tables (`sessions`, `turns`, `llm_messages`, etc.) deduplicate replays automatically via their `ON CONFLICT … DO UPDATE` upsert keys, so duplicate delivery is harmless. `raw_events` has no natural deduplication key (rows are insert-only with an `AUTOINCREMENT` PK), so a crash in the commit→unlink window may produce duplicate `raw_events` rows. This is intentional — the cost of adding a deduplication key to a diagnostic table exceeds the value, and readers must tolerate duplicate raw events.
+
 ---
 
 ## Indexes
@@ -499,6 +501,6 @@ When adding a future migration:
    INSERT OR REPLACE INTO schema_metadata (key, value)
      VALUES ('last_migrated_at', CAST(CAST(strftime('%s', 'now') AS INTEGER) * 1000 AS TEXT));
    ```
-5. Update the `MAX_KNOWN` constant in the store library and bump it in the tray app within the forward compatibility window (≤ 2 versions ahead).
+5. Update `MAX_KNOWN_SCHEMA_VERSION` in `store/src/connection.ts` and the corresponding `maxKnownSchemaVersion` in `clients/macos-tray/AnalyticsTray/Data/AnalyticsDatabase.swift` within the forward compatibility window (≤ 2 versions ahead). Both values must stay in sync — `scripts/check-schema-constants.sh` (run automatically by `scripts/release-check.sh`) will fail the release check when they diverge.
 6. Add any new indexes in the same migration file, not as a retroactive patch to `002_indexes.sql`.
 7. Never rename columns or drop non-empty tables without coordinating a tray release that handles the old schema version in the compatibility window.

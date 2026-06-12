@@ -1,0 +1,33 @@
+{
+  "name": "@token-tally/queries",
+  "version": "0.1.0",
+  "description": "Shared read-only SQLite query layer for @token-tally readers",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/src/index.js",
+      "default": "./dist/src/index.js",
+      "types": "./dist/src/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test 'dist/tests/**/*.test.js'"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.9.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.5.0"
+  }
+}

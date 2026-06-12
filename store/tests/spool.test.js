@@ -1053,3 +1053,239 @@ describe("legacy emergency spool repair (T10)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// T10: Legacy repair via writer-internal drain path (drainRecords)
+// ---------------------------------------------------------------------------
+// These tests mirror the ingest-path T10 tests above but drain through the
+// writer-internal path (drain: { onOpen: true }) to verify that the canonical
+// drainBatch engine is used by both entry points.
+
+describe("T10 repair via writer-internal drain path", () => {
+  /** @type {{ dir: string; cleanup: () => void }} */
+  let tmp;
+
+  before(() => {
+    tmp = makeTempDir();
+  });
+
+  after(() => {
+    tmp.cleanup();
+  });
+
+  test("turn with spool:pi: session repairs via writer-internal drain (onOpen)", async () => {
+    const dbPath = path.join(tmp.dir, "w-t10-turn.db");
+    const spoolDir = path.join(tmp.dir, "w-t10-turn-spool");
+    fs.mkdirSync(spoolDir, { recursive: true });
+
+    // Write a legacy .closed file with a cross-file synthetic session ID.
+    const spoolFile = path.join(spoolDir, "pi-1234-legacy.ndjson.closed");
+    fs.writeFileSync(
+      spoolFile,
+      JSON.stringify({
+        type: "turn",
+        payload: {
+          harnessId: "pi",
+          sessionId: "spool:pi:/legacy/sessions/writer-turn-test.jsonl",
+          harnessTurnId: "/legacy/sessions/writer-turn-test.jsonl:t0",
+          turnIndex: 0,
+          startedAt: 1700000000001,
+        },
+      }) + "\n",
+      "utf8",
+    );
+
+    // Open with drain: { onOpen: true } to trigger the writer-internal engine.
+    const writer = await AnalyticsWriter.open({
+      dbPath,
+      spoolDir,
+      harnessName: "pi",
+      drain: { onOpen: true },
+    });
+    await writer.close();
+
+    // The spool file must have been consumed by the writer-internal drain.
+    assert.equal(
+      fs.existsSync(spoolFile),
+      false,
+      "spool file must be consumed by writer-internal drain",
+    );
+
+    const db = openDb(dbPath);
+    assert.equal(
+      db
+        .prepare("SELECT count(*) as n FROM sessions WHERE harness_session_id=?")
+        .get("/legacy/sessions/writer-turn-test.jsonl").n,
+      1,
+      "synthesised session must exist after writer-internal T10 repair",
+    );
+    assert.equal(
+      db
+        .prepare("SELECT count(*) as n FROM turns WHERE harness_turn_id=?")
+        .get("/legacy/sessions/writer-turn-test.jsonl:t0").n,
+      1,
+      "turn must exist after writer-internal T10 repair",
+    );
+    db.close();
+  });
+
+  test("llm-message with spool:spool:pi: nested turn repairs via writer-internal drain", async () => {
+    const dbPath = path.join(tmp.dir, "w-t10-msg-nested.db");
+    const spoolDir = path.join(tmp.dir, "w-t10-msg-nested-spool");
+    fs.mkdirSync(spoolDir, { recursive: true });
+
+    const sessPath = "/legacy/sessions/writer-nested.jsonl";
+    const nestedTurnId = `spool:spool:pi:${sessPath}:${sessPath}:t1`;
+
+    const spoolFile = path.join(spoolDir, "pi-5678-legacy.ndjson.closed");
+    fs.writeFileSync(
+      spoolFile,
+      JSON.stringify({
+        type: "llm-message",
+        payload: {
+          harnessId: "pi",
+          sessionId: `spool:pi:${sessPath}`,
+          turnId: nestedTurnId,
+          harnessMessageId: `${sessPath}:t1:m0`,
+          ts: 1700000000200,
+          inputTokens: 200,
+          outputTokens: 80,
+          costInputMicros: 2000,
+          costOutputMicros: 800,
+          costSource: "harness",
+        },
+      }) + "\n",
+      "utf8",
+    );
+
+    const writer = await AnalyticsWriter.open({
+      dbPath,
+      spoolDir,
+      harnessName: "pi",
+      drain: { onOpen: true },
+    });
+    await writer.close();
+
+    assert.equal(fs.existsSync(spoolFile), false, "spool file must be consumed");
+
+    const db = openDb(dbPath);
+    assert.equal(
+      db
+        .prepare("SELECT count(*) as n FROM sessions WHERE harness_session_id=?")
+        .get(sessPath).n,
+      1,
+      "synthesised session must exist",
+    );
+    assert.equal(
+      db
+        .prepare("SELECT count(*) as n FROM turns WHERE harness_turn_id=?")
+        .get(`${sessPath}:t1`).n,
+      1,
+      "synthesised turn must exist",
+    );
+    assert.equal(
+      db
+        .prepare("SELECT count(*) as n FROM llm_messages WHERE harness_message_id=?")
+        .get(`${sessPath}:t1:m0`).n,
+      1,
+      "llm_message must exist",
+    );
+    db.close();
+  });
+
+  test("unparseable spool ID in writer-internal path quarantines the file", async () => {
+    const dbPath = path.join(tmp.dir, "w-t10-unparse.db");
+    const spoolDir = path.join(tmp.dir, "w-t10-unparse-spool");
+    const failedDir = path.join(tmp.dir, "w-t10-unparse-failed");
+    fs.mkdirSync(spoolDir, { recursive: true });
+
+    // A turn with a malformed harnessId (slash) — parseLegacySpoolSessionId returns null.
+    const spoolFile = path.join(spoolDir, "pi-9999-unparse.ndjson.closed");
+    fs.writeFileSync(
+      spoolFile,
+      JSON.stringify({
+        type: "turn",
+        payload: {
+          harnessId: "pi",
+          sessionId: "spool:/bad/harnessid/path:some-session",
+          harnessTurnId: "some-turn",
+          startedAt: 1700000000000,
+        },
+      }) + "\n",
+      "utf8",
+    );
+
+    const writer = await AnalyticsWriter.open({
+      dbPath,
+      spoolDir,
+      harnessName: "pi",
+      drain: { onOpen: true, failedDir },
+    });
+    await writer.close();
+
+    // The file must not remain in the spool directory (it should be quarantined).
+    assert.equal(
+      fs.existsSync(spoolFile),
+      false,
+      "unparseable spool file must not remain in spool dir after writer-internal drain",
+    );
+    const failedFiles = fs.existsSync(failedDir) ? fs.readdirSync(failedDir) : [];
+    assert.ok(
+      failedFiles.some((f) => f.endsWith(".ndjson.closed")),
+      `quarantined file must appear in failed dir; found: ${JSON.stringify(failedFiles)}`,
+    );
+  });
+
+  test("T10 repair is idempotent across both drain paths (no duplicate rows)", async () => {
+    // Drain via ingestFile first, then confirm draining the same record again via
+    // writer-internal produces no duplicate rows. Both paths use drainBatch.
+    const dbPath = path.join(tmp.dir, "w-t10-both.db");
+    const spoolDir = path.join(tmp.dir, "w-t10-both-spool");
+    fs.mkdirSync(spoolDir, { recursive: true });
+
+    const sessPath = "/legacy/sessions/both-paths.jsonl";
+    const record = JSON.stringify({
+      type: "turn",
+      payload: {
+        harnessId: "pi",
+        sessionId: `spool:pi:${sessPath}`,
+        harnessTurnId: `${sessPath}:t0`,
+        turnIndex: 0,
+        startedAt: 1700000001000,
+      },
+    });
+
+    // First pass: drain via ingestFile (uses writer.drainRecords → drainBatch).
+    const file1 = path.join(tmp.dir, "both-1.ndjson.closed");
+    fs.writeFileSync(file1, record + "\n", "utf8");
+    const r1 = await ingestFile(file1, { dbPath });
+    assert.equal(r1.ingested, 1, "first ingest must succeed");
+    assert.equal(r1.errors.length, 0, `unexpected errors: ${JSON.stringify(r1.errors)}`);
+
+    // Second pass: drain same logical record via writer-internal path (onOpen sweep).
+    const file2 = path.join(spoolDir, "pi-0000-both.ndjson.closed");
+    fs.writeFileSync(file2, record + "\n", "utf8");
+    const writer = await AnalyticsWriter.open({
+      dbPath,
+      spoolDir,
+      harnessName: "pi",
+      drain: { onOpen: true },
+    });
+    await writer.close();
+
+    assert.equal(fs.existsSync(file2), false, "writer-internal drain must consume file2");
+
+    const db = openDb(dbPath);
+    assert.equal(
+      db.prepare("SELECT count(*) as n FROM sessions").get().n,
+      1,
+      "exactly one session row: upsert semantics ensure no duplicates",
+    );
+    assert.equal(
+      db.prepare("SELECT count(*) as n FROM turns").get().n,
+      1,
+      "exactly one turn row: upsert semantics ensure no duplicates",
+    );
+    db.close();
+  });
+});
+

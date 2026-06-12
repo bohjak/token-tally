@@ -150,7 +150,10 @@ def is_owned(entry: object) -> bool:
     if not isinstance(entry, dict):
         return False
     cmd = entry.get("command", "")
-    return isinstance(cmd, str) and hook_command in cmd
+    # Use the literal hook name (substring) rather than hook_command so that
+    # old bare-name entries ("token-tally-cursor-hook") are cleaned up even
+    # when hook_command is now an absolute path ending with that name.
+    return isinstance(cmd, str) and "token-tally-cursor-hook" in cmd
 
 # ----- Merge: filter then append -----
 for event in EVENTS:
@@ -230,8 +233,11 @@ main() {
     *) warn "${HOME}/.local/bin is not on PATH; Cursor may not find token-tally-cursor-hook" ;;
   esac
 
-  # Merge owned hook entries into ~/.cursor/hooks.json in Cursor-native format.
-  merge_hooks "${hooks_path}" "token-tally-cursor-hook"
+  # Pass the absolute symlink path rather than the bare hook name so
+  # Cursor's hooks.json contains a path-stable command. The is_owned filter
+  # uses the literal hook name (substring), so old bare-name entries from
+  # previous installs are cleaned up and converge to the absolute form.
+  merge_hooks "${hooks_path}" "${hook_link}"
   info "Cursor hooks merged into ${hooks_path}"
 
   # ---- Daemon note ----

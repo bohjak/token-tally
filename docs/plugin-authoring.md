@@ -184,23 +184,23 @@ Cursor Pro), record the subscription period and link each covered message to it:
 
 ```ts
 const sub = await writer.recordSubscription({
-  id: "claude-pro:2026-05",
   harnessId: "claude-code",
-  planName: "claude-pro",         // writer-defined slug
-  periodStart: 1746057600,        // Unix seconds
-  periodEnd: 1748736000,
+  planName: "claude-pro",         // writer-defined slug; the store mints the UUID
+  periodStart: 1746057600000,     // Unix ms (not seconds)
+  periodEnd: 1748735999999,       // Unix ms, inclusive end of billing period
   fixedCost: 20.00,               // flat fee in currency units (float OK here)
   currency: "USD",
-  quotaLimit: null,               // optional
+  quotaLimit: null,               // optional quota counters
   quotaUsed: null,
   quotaUnit: null,
 });
+// sub.id is the ToTally-internal UUID for this subscription period.
 
 // Link a covered message.
 await writer.recordLlmMessage({
   ...messageFields,
-  cost_source: "subscription_covered",
-  subscription_id: sub.id,
+  costSource: "subscription_covered",
+  subscriptionId: sub.id,         // use the UUID returned above
   // cost_* columns still hold the PAYG list-price equivalent.
 });
 ```
@@ -527,10 +527,20 @@ never creates duplicate rows.
 ### Raw event capture
 
 Raw capture is **off by default**. The only eligible event is `preCompact`,
-which carries the context window token count and window size. When
-`captureRaw` is enabled, the writer emits a single minimal raw event with
-only `context_tokens` and `context_window_size` — never prompt text or
-response content. Enable it in `~/.config/token-tally/config.json`:
+which fires before Cursor summarises the context window. When `captureRaw` is
+enabled, the writer emits a minimal raw event with these fields only — no
+prompt text or response content:
+
+| Field | Type | Notes |
+|---|---|---|
+| `trigger` | string | `"auto"` or event-provided value |
+| `context_tokens` | number\|null | Tokens currently in the context window |
+| `context_window_size` | number\|null | Maximum context window size |
+| `context_usage_percent` | number\|null | Percentage of window in use |
+| `is_first_compaction` | boolean\|null | Whether this is the first compaction in the session |
+| `session_id` | string | Present when a harness session ID is available |
+
+Enable it in `~/.config/token-tally/config.json`:
 
 ```json
 {

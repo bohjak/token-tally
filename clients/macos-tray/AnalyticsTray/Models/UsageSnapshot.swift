@@ -77,4 +77,12 @@ struct UsageSnapshot: Equatable {
     /// the displayed total is a lower bound; the UI must surface a caveat so
     /// users are not misled into interpreting missing cost as "free".
     let unpricedMessages: Int64
+
+    /// True when the database schema version is newer than what this tray build
+    /// knows about but still within the forward-compatibility window.
+    ///
+    /// Derived from `AnalyticsSchema.schemaIsDegraded` at snapshot load time.
+    /// When true the popover shows a non-blocking update banner; the tray can
+    /// still read all data it understands from older schema columns.
+    let schemaIsDegraded: Bool
 }

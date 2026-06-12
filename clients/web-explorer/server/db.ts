@@ -9,16 +9,12 @@ import Database from "better-sqlite3";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-
-// ---------------------------------------------------------------------------
-// Schema version constants -- mirrors store/src/connection.ts.
-// Inlined to avoid pulling in the writer-focused store package as a dependency
-// of this read-only server.
-// ---------------------------------------------------------------------------
-
-const MIN_SUPPORTED_SCHEMA_VERSION = 1;
-const MAX_KNOWN_SCHEMA_VERSION = 1;
-export const SCHEMA_FORWARD_WINDOW = 2;
+import {
+  MIN_SUPPORTED_SCHEMA_VERSION,
+  MAX_KNOWN_SCHEMA_VERSION,
+  SCHEMA_FORWARD_WINDOW,
+  checkSchemaCompatibility,
+} from "@token-tally/queries";
 
 // ---------------------------------------------------------------------------
 // Path helpers
@@ -55,7 +51,7 @@ export type SchemaStatus = "ok" | "degraded";
  *   - version > MAX + WINDOW   -> refuse; prompt to update the binary
  */
 export function openReadOnly(
-  dbPath: string
+  dbPath: string,
 ):
   | { ok: true; db: Database.Database; close: () => void; schemaStatus: SchemaStatus; schemaVersion: number }
   | { ok: false; reason: string } {
@@ -81,7 +77,6 @@ export function openReadOnly(
     };
   }
 
-  // Schema compatibility check (reader expectation #2 from docs/schema.md).
   const compat = checkSchemaCompatibility(db);
   if (compat.status === "needs_migration") {
     db.close();
@@ -111,42 +106,4 @@ export function openReadOnly(
     schemaStatus: compat.status === "degraded" ? "degraded" : "ok",
     schemaVersion: compat.version,
   };
-}
-
-// ---------------------------------------------------------------------------
-// Internal: schema compatibility check
-// Mirrors the logic in store/src/connection.ts:readSchemaCompatibility.
-// ---------------------------------------------------------------------------
-
-type SchemaCheckResult =
-  | { status: "needs_migration"; version: number }
-  | { status: "ok"; version: number }
-  | { status: "degraded"; version: number }
-  | { status: "too_new"; version: number };
-
-function checkSchemaCompatibility(db: Database.Database): SchemaCheckResult {
-  const tableRow = db
-    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_metadata'")
-    .get() as { name: string } | undefined;
-
-  if (tableRow == null) {
-    return { status: "needs_migration", version: 0 };
-  }
-
-  const versionRow = db
-    .prepare("SELECT value FROM schema_metadata WHERE key = 'schema_version'")
-    .get() as { value: string } | undefined;
-
-  const version = versionRow != null ? parseInt(versionRow.value, 10) : 0;
-
-  if (version < MIN_SUPPORTED_SCHEMA_VERSION) {
-    return { status: "needs_migration", version };
-  }
-  if (version <= MAX_KNOWN_SCHEMA_VERSION) {
-    return { status: "ok", version };
-  }
-  if (version <= MAX_KNOWN_SCHEMA_VERSION + SCHEMA_FORWARD_WINDOW) {
-    return { status: "degraded", version };
-  }
-  return { status: "too_new", version };
 }

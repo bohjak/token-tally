@@ -165,7 +165,6 @@ run_safe_checks() {
   trap "rm -rf '${tmp_dir}'" EXIT
 
   local tmp_db="${tmp_dir}/events.db"
-  local tmp_spool="${tmp_dir}/spool"
   local tmp_legacy_db="${tmp_dir}/legacy.db"
 
   # ---- 1. Prerequisites ----
@@ -451,7 +450,7 @@ run_real_checks() {
   local cursor_hook_link_real="${HOME}/.local/bin/token-tally-cursor-hook"
   local cursor_hooks_json_real="${HOME}/.cursor/hooks.json"
   if [[ ! -d "${HOME}/.cursor" ]]; then
-    warn "~/.cursor not found — Cursor integration was skipped during install (expected)"
+    warn "${HOME}/.cursor not found — Cursor integration was skipped during install (expected)"
   else
     # Verify the binary symlink points to the correct repo target.
     if [[ -L "${cursor_hook_link_real}" ]]; then
@@ -499,11 +498,159 @@ PY
         fail "hooks.json: missing token-tally-cursor-hook entries for: ${cursor_missing_events}"
       fi
     else
-      fail "~/.cursor/hooks.json not found after install"
+      fail "${HOME}/.cursor/hooks.json not found after install"
     fi
   fi
 
-  # ---- 6. make doctor ----
+  # ---- 6. Claude Code integration ----
+  # Analogous to the Cursor integration check above.
+  section "Claude Code integration"
+  local claude_hook_link="${HOME}/.local/bin/token-tally-claude-hook"
+  local claude_settings="${HOME}/.claude/settings.json"
+  if [[ ! -d "${HOME}/.claude" ]]; then
+    warn "${HOME}/.claude not found — Claude Code integration was skipped during install (expected)"
+  else
+    # Verify the binary symlink points to the correct repo target.
+    if [[ -L "${claude_hook_link}" ]]; then
+      local claude_target
+      claude_target=$(readlink "${claude_hook_link}")
+      local expected_claude_target="${REPO_ROOT}/harnesses/claude-code/writer/dist/bin/token-tally-claude-hook.js"
+      if [[ "${claude_target}" == "${expected_claude_target}" ]]; then
+        pass "token-tally-claude-hook → correct repo path"
+      else
+        fail "token-tally-claude-hook → ${claude_target} (expected ${expected_claude_target})"
+      fi
+    else
+      fail "token-tally-claude-hook symlink not found at ${claude_hook_link}"
+    fi
+
+    # Verify that the installed command in settings is the absolute symlink path,
+    # not the old bare-name form "token-tally-claude-hook".
+    if [[ -f "${claude_settings}" ]]; then
+      local claude_cmd_check
+      claude_cmd_check=$(
+        TT_SETTINGS_PATH="${claude_settings}" \
+        TT_HOOK_LINK="${claude_hook_link}" \
+        python3 - <<'PY'
+import json, os
+with open(os.environ["TT_SETTINGS_PATH"]) as f:
+    data = json.load(f)
+hook_link = os.environ["TT_HOOK_LINK"]
+hooks = data.get("hooks", {})
+found_absolute = False
+found_bare = False
+for event_hooks in hooks.values():
+    if not isinstance(event_hooks, list):
+        continue
+    for matcher in event_hooks:
+        if not isinstance(matcher, dict):
+            continue
+        for hook in matcher.get("hooks", []):
+            if not isinstance(hook, dict):
+                continue
+            cmd = hook.get("command", "")
+            if isinstance(cmd, str):
+                if cmd == hook_link or cmd.endswith("/token-tally-claude-hook"):
+                    found_absolute = True
+                elif cmd == "token-tally-claude-hook":
+                    found_bare = True
+if found_absolute and not found_bare:
+    print("ABSOLUTE")
+elif found_absolute and found_bare:
+    print("BOTH")
+elif found_bare:
+    print("BARE_ONLY")
+else:
+    print("MISSING")
+PY
+      ) || claude_cmd_check="ERROR"
+      case "${claude_cmd_check}" in
+        ABSOLUTE)  pass "Claude Code settings: uses absolute hook command" ;;
+        BOTH)      fail "Claude Code settings: both bare and absolute commands present (duplicate)" ;;
+        BARE_ONLY) fail "Claude Code settings: still using bare hook name — expected absolute path" ;;
+        MISSING)   fail "Claude Code settings: ToTally hook command not found after install" ;;
+        *)         warn "Claude Code settings: unexpected check result: ${claude_cmd_check}" ;;
+      esac
+    else
+      fail "${HOME}/.claude/settings.json not found after install"
+    fi
+
+    # Old-entry convergence: inject a bare-name entry into settings (simulating
+    # an old ToTally install), re-run the installer, then verify the result
+    # contains only the absolute path with no duplicates and no bare names.
+    if [[ -f "${claude_settings}" ]]; then
+      section "Claude Code old-entry convergence"
+      # Inject a bare-name hook command alongside the absolute one already written.
+      TT_SETTINGS_PATH="${claude_settings}" python3 - <<'PY'
+import json, os, shutil, time
+from pathlib import Path
+p = Path(os.environ["TT_SETTINGS_PATH"])
+with p.open() as f:
+    data = json.load(f)
+hooks = data.setdefault("hooks", {})
+# Add a bare-name entry to the first event that already has our hook.
+for ev, matchers in list(hooks.items()):
+    if isinstance(matchers, list):
+        for m in matchers:
+            if isinstance(m, dict):
+                m.setdefault("hooks", []).append({"type": "command", "command": "token-tally-claude-hook"})
+                break
+        break
+tmp = p.with_suffix(".json.tmp")
+with tmp.open("w") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+tmp.replace(p)
+PY
+      # Re-run Claude Code installer to trigger convergence.
+      if bash "${REPO_ROOT}/scripts/install-claude-code.sh" "${REPO_ROOT}" >/dev/null 2>&1; then
+        local convergence_check
+        convergence_check=$(
+          TT_SETTINGS_PATH="${claude_settings}" \
+          TT_HOOK_LINK="${claude_hook_link}" \
+          python3 - <<'PY'
+import json, os
+with open(os.environ["TT_SETTINGS_PATH"]) as f:
+    data = json.load(f)
+hook_link = os.environ["TT_HOOK_LINK"]
+hooks = data.get("hooks", {})
+found_absolute = 0
+found_bare = 0
+for event_hooks in hooks.values():
+    if not isinstance(event_hooks, list):
+        continue
+    for matcher in event_hooks:
+        if not isinstance(matcher, dict):
+            continue
+        for hook in matcher.get("hooks", []):
+            if not isinstance(hook, dict):
+                continue
+            cmd = hook.get("command", "")
+            if isinstance(cmd, str):
+                if cmd == hook_link or cmd.endswith("/token-tally-claude-hook"):
+                    found_absolute += 1
+                elif cmd == "token-tally-claude-hook":
+                    found_bare += 1
+print(f"absolute={found_absolute},bare={found_bare}")
+PY
+        ) || convergence_check="error"
+        local abs_count bare_count
+        abs_count=$(echo "${convergence_check}" | grep -oP 'absolute=\K[0-9]+') || abs_count=0
+        bare_count=$(echo "${convergence_check}" | grep -oP 'bare=\K[0-9]+') || bare_count=0
+        if [[ "${bare_count}" == "0" && "${abs_count}" != "0" ]]; then
+          pass "Claude Code convergence: bare-name replaced by absolute command (abs=${abs_count}, bare=${bare_count})"
+        elif [[ "${bare_count}" != "0" ]]; then
+          fail "Claude Code convergence: bare-name entries still present after re-install (abs=${abs_count}, bare=${bare_count})"
+        else
+          fail "Claude Code convergence: no hook commands found after re-install"
+        fi
+      else
+        warn "Claude Code convergence: re-install returned non-zero (Cursor may not be present — ok if Claude Code only)"
+      fi
+    fi
+  fi
+
+  # ---- 7. make doctor ----
   section "make doctor"
   if make -C "${REPO_ROOT}" doctor; then
     pass "make doctor: passed"
