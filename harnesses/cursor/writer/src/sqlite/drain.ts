@@ -29,6 +29,7 @@
  * key format may change across Cursor versions without notice.
  */
 
+import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { getCursorStateDbPath } from "./paths.js";
 import { parseBubbleKey, composerDataKey } from "./keys.js";
@@ -82,6 +83,14 @@ export async function drainSqlite(
   }
 
   // ── 2. Open database ──────────────────────────────────────────────────────
+  // Guard: only open if the file already exists. DatabaseSync's default open
+  // flags can CREATE a new file, which would leave an empty state.vscdb inside
+  // Cursor's private storage if the DB is temporarily absent (e.g. during a
+  // Cursor update or migration). We never want to create that file.
+  if (!existsSync(resolvedPath)) {
+    return empty;
+  }
+
   let db: DatabaseSync;
   try {
     // DatabaseSync is the Node 24 built-in SQLite API (stable, no native addon).
@@ -89,7 +98,7 @@ export async function drainSqlite(
     // later patch release; PRAGMA query_only=1 achieves equivalent protection.
     db = new DatabaseSync(resolvedPath);
   } catch (err) {
-    // File absent, permission denied, DB locked, or corrupt — all expected.
+    // Permission denied, DB locked, or corrupt — all expected.
     return empty;
   }
 

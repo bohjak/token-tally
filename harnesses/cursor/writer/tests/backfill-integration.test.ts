@@ -267,13 +267,15 @@ describe("stop hook: no transcript → placeholder unchanged", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Test 3: drained flag prevents double-backfill
+// Test 3: stop backfill is idempotent — second stop does not duplicate rows
 //
-// When stop fires a second time (e.g. loop_count = 1), the backfill must not
-// create extra rows or overwrite already-backfilled data.
+// When stop fires a second time (e.g. loop_count = 1 with a follow-up message),
+// the backfill runs again (the drained flag was removed — M4 fix), but because
+// the store upserts on (harness_id, harness_message_id), no duplicate rows are
+// created and the backfilled values remain correct.
 // ---------------------------------------------------------------------------
 
-describe("stop hook: drained flag prevents double-backfill", () => {
+describe("stop hook: backfill is idempotent — second stop produces no duplicates", () => {
   let tmpDir = "";
   let dbPath = "";
   let env: Record<string, string> = {};
@@ -315,7 +317,7 @@ describe("stop hook: drained flag prevents double-backfill", () => {
     };
     runHook(stop1, env);
 
-    // Second stop (loop_count = 1) — drained flag prevents repeat backfill.
+    // Second stop (loop_count = 1) — backfill runs again but is idempotent.
     const stop2 = {
       ...loadFixture("hooks/stop.json"),
       transcript_path: transcriptPath,
@@ -523,5 +525,125 @@ describe("stop hook: subscription_covered via hooks.json", () => {
     // List-price equivalent is still stored.
     assert.ok(row.cost_total_micros > 0, "list-price cost preserved");
     assert.ok(row.subscription_id !== null, "subscription_id FK must be set");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test 6: multi-turn backfill — tokens for ALL turns are backfilled
+//
+// Validates the M4 fix: the drained flag was removed so backfill runs on every
+// stop event, not only the first. This test runs two full turns and verifies
+// that both llm_messages receive token backfill.
+// ---------------------------------------------------------------------------
+
+describe("stop hook: multi-turn backfill — all turns receive tokens (M4 fix)", () => {
+  let tmpDir = "";
+  let dbPath = "";
+  let env: Record<string, string> = {};
+  let transcriptPath = "";
+
+  const CONV_ID = "cursor-conv-mt-backfill-001";
+  const GEN_ID_1 = "cursor-gen-mt-001";
+  const GEN_ID_2 = "cursor-gen-mt-002";
+  const MSG_ID_1 = `cursor:${CONV_ID}:${GEN_ID_1}:assistant`;
+  const MSG_ID_2 = `cursor:${CONV_ID}:${GEN_ID_2}:assistant`;
+
+  before(async () => {
+    const e = makeTmpEnv();
+    tmpDir = e.tmpDir;
+    dbPath = e.dbPath;
+    env = e.env;
+
+    transcriptPath = path.join(tmpDir, "multi-turn-transcript.jsonl");
+    // Transcript contains both turns' assistant messages.
+    await writeTranscript(transcriptPath, [
+      {
+        role: "assistant",
+        id: GEN_ID_1,
+        model: "claude-sonnet-4-20250514",
+        usage: { input_tokens: 100, output_tokens: 50 },
+      },
+      {
+        role: "assistant",
+        id: GEN_ID_2,
+        model: "claude-sonnet-4-20250514",
+        usage: { input_tokens: 200, output_tokens: 80 },
+      },
+    ]);
+
+    function makePayload(event: string, genId: string, extra?: Record<string, unknown>): Record<string, unknown> {
+      return {
+        hook_event_name: event,
+        conversation_id: CONV_ID,
+        generation_id: genId,
+        model: "claude-sonnet-4-20250514",
+        cursor_version: "1.7.5",
+        workspace_roots: ["/tmp"],
+        cwd: "/tmp",
+        ...extra,
+      };
+    }
+
+    // sessionStart (no generation_id)
+    const result0 = runHook({
+      hook_event_name: "sessionStart",
+      conversation_id: CONV_ID,
+      session_id: CONV_ID,
+      model: "claude-sonnet-4-20250514",
+      cursor_version: "1.7.5",
+      workspace_roots: ["/tmp"],
+      cwd: "/tmp",
+    }, env);
+    assert.equal(result0.exitCode, 0, `sessionStart failed: ${result0.stderr.slice(0, 200)}`);
+
+    // Turn 1
+    for (const [event, genId, extra] of [
+      ["beforeSubmitPrompt", GEN_ID_1, {}],
+      ["afterAgentResponse", GEN_ID_1, {}],
+      ["stop", GEN_ID_1, { transcript_path: transcriptPath, status: "completed", loop_count: 0 }],
+    ] as Array<[string, string, Record<string, unknown>]>) {
+      const res = runHook(makePayload(event, genId, extra), env);
+      assert.equal(res.exitCode, 0, `${event} turn1 failed: ${res.stderr.slice(0, 200)}`);
+    }
+
+    // Turn 2
+    for (const [event, genId, extra] of [
+      ["beforeSubmitPrompt", GEN_ID_2, {}],
+      ["afterAgentResponse", GEN_ID_2, {}],
+      ["stop", GEN_ID_2, { transcript_path: transcriptPath, status: "completed", loop_count: 0 }],
+    ] as Array<[string, string, Record<string, unknown>]>) {
+      const res = runHook(makePayload(event, genId, extra), env);
+      assert.equal(res.exitCode, 0, `${event} turn2 failed: ${res.stderr.slice(0, 200)}`);
+    }
+  });
+
+  after(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("turn 1 message is backfilled with tokens", () => {
+    const row = readMessageRow(dbPath, MSG_ID_1);
+    assert.ok(row !== null, "turn 1 llm_message must exist");
+    assert.equal(row!.cost_source, "writer", "turn 1 must be writer-priced");
+    assert.equal(row!.input_tokens, 100, "turn 1 input tokens");
+    assert.equal(row!.output_tokens, 50, "turn 1 output tokens");
+    assert.ok(row!.cost_total_micros > 0, "turn 1 cost must be non-zero");
+  });
+
+  test("turn 2 message is backfilled with tokens (M4 fix: was broken before drained-flag removal)", () => {
+    const row = readMessageRow(dbPath, MSG_ID_2);
+    assert.ok(row !== null, "turn 2 llm_message must exist");
+    assert.equal(row!.cost_source, "writer", "turn 2 must be writer-priced");
+    assert.equal(row!.input_tokens, 200, "turn 2 input tokens");
+    assert.equal(row!.output_tokens, 80, "turn 2 output tokens");
+    assert.ok(row!.cost_total_micros > 0, "turn 2 cost must be non-zero");
+  });
+
+  test("exactly 2 llm_message rows — no duplicates across two turns", () => {
+    const db = new DatabaseSync(dbPath);
+    db.exec("PRAGMA query_only = 1");
+    const row = db.prepare("SELECT count(*) as n FROM llm_messages WHERE harness_id='cursor'").get() as { n: number };
+    db.close();
+    assert.equal(row.n, 2, "should have exactly 2 llm_message rows");
   });
 });

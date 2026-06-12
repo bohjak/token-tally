@@ -94,6 +94,13 @@ export async function handle(
     state.lastModelId = payload.model;
   }
 
+  // Track this placeholder ID so runBackfill can correlate transcript entries
+  // to the correct placeholder rows (M8 correlation improvement).
+  if (!Array.isArray(state.pendingHarnessMessageIds)) {
+    state.pendingHarnessMessageIds = [];
+  }
+  state.pendingHarnessMessageIds.push(harnessMessageId);
+
   await writeSessionState(harnessSessionId, state);
 }
 

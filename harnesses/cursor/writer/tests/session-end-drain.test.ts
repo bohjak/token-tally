@@ -222,17 +222,16 @@ describe("sessionEnd: drains when stop was skipped", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Scenario 2: stop was fired first → sessionEnd skips drain (drained=true)
+// Scenario 2: stop was fired first → sessionEnd also runs backfill (idempotent)
 //
-// Normal agent loop: stop fires (sets drained=true on the state file), then
-// sessionEnd fires. sessionEnd must read drained=true from the state and skip
-// the drain entirely to avoid redundant work.
-//
-// Note: if the drain did run a second time it would be idempotent (upsert),
-// but we still test that cost_source does not regress to 'unknown'.
+// Normal agent loop: stop fires (backfills tokens), then sessionEnd fires.
+// After the M4 drained-flag removal, sessionEnd always attempts backfill —
+// it does NOT skip based on a flag. Because the store upserts are idempotent,
+// the second backfill does not regress cost_source back to 'unknown' and does
+// not create duplicate rows.
 // ---------------------------------------------------------------------------
 
-describe("sessionEnd: skips drain when stop already ran (drained=true)", () => {
+describe("sessionEnd: backfill is idempotent when stop already ran", () => {
   let tmpDir = "";
   let dbPath = "";
   let env: Record<string, string> = {};

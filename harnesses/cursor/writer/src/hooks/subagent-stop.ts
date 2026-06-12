@@ -114,8 +114,6 @@ export async function handle(
   }
 
   // ── Upsert backfilled records ─────────────────────────────────────────────
-  const now = Date.now();
-
   for (const record of records) {
     const cost = computeCostMicros({
       modelId: record.modelId ?? null,
@@ -125,16 +123,18 @@ export async function handle(
       cacheWriteTokens: 0,
     });
 
+    // Only classify as subscription_covered when pricing actually resolved.
     const costSource =
-      subscriptionId !== null
+      subscriptionId !== null && cost.costSource === "writer"
         ? "subscription_covered"
-        : cost.costSource; // "writer" | "unknown"
+        : cost.costSource;
 
     await writer.recordLlmMessage({
       sessionId: state.centralSessionId,
+      // turnId deliberately omitted: null -> COALESCE keeps existing turn_id
       harnessId: "cursor",
       harnessMessageId: record.harnessMessageId,
-      ts: now,
+      ts: 0, // sentinel: COALESCE(NULLIF(0,0), existing_ts) -> keeps existing
       modelId: record.modelId,
       provider: record.provider,
       inputTokens: record.inputTokens,
@@ -144,7 +144,7 @@ export async function handle(
       costCacheReadMicros: cost.costCacheReadMicros,
       costCacheWriteMicros: cost.costCacheWriteMicros,
       costSource,
-      subscriptionId: subscriptionId ?? undefined,
+      subscriptionId: costSource === "subscription_covered" ? (subscriptionId ?? undefined) : undefined,
     });
   }
 }

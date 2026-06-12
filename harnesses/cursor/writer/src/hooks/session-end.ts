@@ -2,7 +2,7 @@
  * hooks/session-end.ts — Handler for the Cursor sessionEnd event.
  *
  * Fires once when a Cursor composer conversation terminates. Responsibilities:
- *   1. Run one final best-effort token/cost backfill if stop did not already drain.
+ *   1. Run one final best-effort token/cost backfill (always — idempotent).
  *   2. Close the session row by setting ended_at.
  *   3. Delete the on-disk session state file.
  *
@@ -21,6 +21,7 @@ import {
 } from "../state/session-state.js";
 import { extractHarnessSessionId } from "../ids/synthesize.js";
 import { runBackfill } from "./stop.js";
+import { INTEGRATION_VERSION } from "../version.js";
 
 // ---------------------------------------------------------------------------
 // Handler
@@ -63,6 +64,15 @@ export async function handle(
         ? payload.workspace_roots[0]
         : undefined);
 
+    // Register harness FIRST — sessions.harness_id has a FK to harnesses(name).
+    // Without this, recordSession fails with a FK violation on a fresh DB.
+    await writer.recordHarness({
+      name: "cursor",
+      displayName: "Cursor",
+      version: payload.cursor_version ?? undefined,
+      integrationVersion: INTEGRATION_VERSION,
+    });
+
     const sessionResult = await writer.recordSession({
       harnessId: "cursor",
       harnessSessionId,
@@ -75,12 +85,13 @@ export async function handle(
   }
 
   // ── 3. Final best-effort token/cost backfill ─────────────────────────────
-  // A normal agent loop fires stop before sessionEnd, but abrupt window closes
-  // may skip stop. Run one final drain here before deleting the state file.
-  if (!state.drained) {
-    await runBackfill(writer, harnessSessionId, state.centralSessionId, payload);
-    state.drained = true;
-  }
+  // Always run — a normal loop fires stop first (backfill already ran), but
+  // abrupt window closes may skip stop entirely. Running again after stop is
+  // safe: the store upserts are idempotent and COALESCE guards preserve
+  // existing turn_id and ts.
+  const pendingIds = !Array.isArray(state.pendingHarnessMessageIds) ? [] : state.pendingHarnessMessageIds;
+  await runBackfill(writer, harnessSessionId, state.centralSessionId, payload, pendingIds);
+  state.pendingHarnessMessageIds = [];
 
   // ── 4. Close the session row ─────────────────────────────────────────────
   // Pass startedAt: 0 so the NULLIF guard in the upsert SQL preserves the

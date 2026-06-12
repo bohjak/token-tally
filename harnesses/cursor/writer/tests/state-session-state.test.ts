@@ -50,7 +50,7 @@ function makeFullState(overrides: Partial<SessionState> = {}): SessionState {
     },
     lastModelId: "claude-sonnet-4-5",
     lastProvider: "anthropic",
-    drained: false,
+    pendingHarnessMessageIds: [],
     subscriptionId: null,
     ...overrides,
   };
@@ -169,7 +169,7 @@ test("round-trip preserves all new Cursor-specific fields", async () => {
       lastGenerationId: "gen-xyz",
       messageIndex: 7,
       toolIndex: 4,
-      drained: true,
+      pendingHarnessMessageIds: ["cursor:s1:g1:assistant"],
     });
 
     await writeSessionState(sessionId, state);
@@ -179,7 +179,7 @@ test("round-trip preserves all new Cursor-specific fields", async () => {
     assert.equal(read.lastGenerationId, "gen-xyz");
     assert.equal(read.messageIndex, 7);
     assert.equal(read.toolIndex, 4);
-    assert.equal(read.drained, true);
+    assert.deepEqual(read.pendingHarnessMessageIds, ["cursor:s1:g1:assistant"]);
   });
 });
 
@@ -269,7 +269,7 @@ describe("makeInitialSessionState", () => {
     assert.equal(state.lastModelId, null);
     assert.equal(state.lastProvider, null);
     assert.equal(state.subscriptionId, null);
-    assert.equal(state.drained, false);
+    assert.deepEqual(state.pendingHarnessMessageIds, []);
     assert.deepEqual(state.activeTools, {});
   });
 

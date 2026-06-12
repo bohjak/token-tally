@@ -23,6 +23,7 @@ import {
   extractHarnessSessionId,
   computeHarnessTurnId,
 } from "../ids/synthesize.js";
+import { INTEGRATION_VERSION } from "../version.js";
 
 // ---------------------------------------------------------------------------
 // Handler
@@ -64,6 +65,15 @@ export async function handle(
       (payload.workspace_roots && payload.workspace_roots.length > 0
         ? payload.workspace_roots[0]
         : undefined);
+
+    // Register harness FIRST — sessions.harness_id has a FK to harnesses(name).
+    // Without this, recordSession fails with a FK violation on a fresh DB.
+    await writer.recordHarness({
+      name: "cursor",
+      displayName: "Cursor",
+      version: payload.cursor_version ?? undefined,
+      integrationVersion: INTEGRATION_VERSION,
+    });
 
     const sessionResult = await writer.recordSession({
       harnessId: "cursor",

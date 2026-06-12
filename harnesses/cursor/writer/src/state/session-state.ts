@@ -34,8 +34,7 @@ import { sessionStateFile } from "./paths.js";
  * - `messageIndex` tracks assistant messages separately from turns because
  *   `afterAgentResponse` fires without a separate turn-start event.
  * - `toolIndex` provides a synthesized tool-call id when `tool_use_id` is absent.
- * - `drained` is set to true after a `stop` or `sessionEnd` event successfully
- *   attempts the transcript / state.vscdb token backfill so we don't repeat it.
+ * - `pendingHarnessMessageIds` tracks placeholder IDs waiting for token backfill.
  * - `lastGenerationId` detects when a new `generation_id` arrives (= new turn).
  */
 export interface SessionState {
@@ -108,11 +107,15 @@ export interface SessionState {
   // ---- Backfill control ----------------------------------------------------
 
   /**
-   * True after a `stop` or `sessionEnd` event has attempted the best-effort
-   * transcript / state.vscdb token backfill. Prevents double-draining when
-   * both events fire in the same session.
+   * Harness message IDs written by `afterAgentResponse` that have not yet
+   * been backfilled with real token counts. Populated by afterAgentResponse,
+   * consumed and cleared by `runBackfill` in the stop/sessionEnd handlers.
+   *
+   * Used as correlation hints in `drainTranscript` so backfill upserts update
+   * the correct placeholder rows even when transcript entry IDs differ from
+   * the generation_id embedded in the placeholder ID.
    */
-  drained: boolean;
+  pendingHarnessMessageIds: string[];
 
   // ---- Subscription --------------------------------------------------------
 
@@ -225,7 +228,7 @@ export function makeInitialSessionState(
     activeTools: {},
     lastModelId: null,
     lastProvider: null,
-    drained: false,
+    pendingHarnessMessageIds: [],
     subscriptionId: null,
   };
 }

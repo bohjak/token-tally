@@ -55,10 +55,14 @@ export async function handle(
   }
 
   // ── 3. Resolve pending tool entry ─────────────────────────────────────────
+  // When tool_use_id is absent, preToolUse stored the entry under
+  // tc${toolIndex} and THEN incremented toolIndex. Use toolIndex - 1 to find
+  // the matching pre-tool entry. Tool calls in Cursor are serial per turn.
+  const lookupIndex = payload.tool_use_id ? state.toolIndex : Math.max(0, state.toolIndex - 1);
   const harnessToolCallId = computeHarnessToolCallId(
     payload.tool_use_id,
     harnessSessionId,
-    state.toolIndex,
+    lookupIndex,
   );
 
   const pending = state.activeTools[harnessToolCallId] ?? {

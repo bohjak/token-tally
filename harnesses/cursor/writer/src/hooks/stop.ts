@@ -78,12 +78,13 @@ export async function handle(
   }
 
   // ── 3. Best-effort token/cost backfill ────────────────────────────────────
-  // Only run once per session to avoid double-counting when stop fires multiple
-  // times (e.g. loop_count > 0 with followup_message).
-  if (!state.drained) {
-    await runBackfill(writer, harnessSessionId, state.centralSessionId, payload);
-    state.drained = true;
-  }
+  // Run on every stop. The store upserts are idempotent, so a second stop
+  // (e.g. loop_count > 0) updates existing rows without duplicating them.
+  // Running on each stop ensures messages from every turn get backfilled, not
+  // only the first (M4 fix: drained flag removed).
+  const pendingIds = !Array.isArray(state.pendingHarnessMessageIds) ? [] : state.pendingHarnessMessageIds;
+  await runBackfill(writer, harnessSessionId, state.centralSessionId, payload, pendingIds);
+  state.pendingHarnessMessageIds = [];
 
   // ── 4. Close current turn ─────────────────────────────────────────────────
   // Both IDs are required — if either is null the turn was never opened.
@@ -140,6 +141,7 @@ export async function runBackfill(
     transcript_path?: string | null;
     conversation_id?: string;
   },
+  pendingHarnessMessageIds?: string[],
 ): Promise<void> {
   const conversationId = payload.conversation_id ?? harnessSessionId;
 
@@ -148,7 +150,7 @@ export async function runBackfill(
   let sessionModelFromSqlite: string | null = null;
 
   if (typeof payload.transcript_path === "string" && payload.transcript_path !== "") {
-    records = await drainTranscript(payload.transcript_path, conversationId);
+    records = await drainTranscript(payload.transcript_path, conversationId, pendingHarnessMessageIds);
   }
 
   // ── b. SQLite fallback ────────────────────────────────────────────────────
@@ -186,8 +188,6 @@ export async function runBackfill(
   }
 
   // ── d. Upsert each backfilled record ──────────────────────────────────────
-  const now = Date.now();
-
   for (const record of records) {
     // Apply session-level model fallback from SQLite when the record lacks one.
     const modelId = record.modelId ?? sessionModelFromSqlite ?? undefined;
@@ -203,20 +203,24 @@ export async function runBackfill(
     });
 
     // Determine cost_source:
-    //   - 'subscription_covered' when a subscription is active (use list-price
-    //     cost columns as the PAYG equivalent, per the schema contract).
-    //   - 'writer' when pricing resolved successfully.
-    //   - 'unknown' when the model is not in the pricing table (cost = zeros).
+    //   - 'subscription_covered' only when BOTH a subscription is configured AND
+    //     pricing resolved to 'writer'. Marking unknown-priced rows as
+    //     'subscription_covered' makes $0 appear "free" to readers.
+    //   - 'writer' when pricing resolved without a subscription.
+    //   - 'unknown' when the model is not in the pricing table.
     const costSource =
-      subscriptionId !== null
+      subscriptionId !== null && cost.costSource === "writer"
         ? "subscription_covered"
-        : cost.costSource; // "writer" | "unknown"
+        : cost.costSource;
 
+    // Pass ts: 0 (sentinel) and omit turnId so the store COALESCE guards
+    // preserve the placeholder's original timestamp and turn linkage.
     await writer.recordLlmMessage({
       sessionId: centralSessionId,
+      // turnId deliberately omitted: null -> COALESCE keeps existing turn_id
       harnessId: "cursor",
       harnessMessageId: record.harnessMessageId,
-      ts: now,
+      ts: 0, // sentinel: COALESCE(NULLIF(0,0), existing_ts) -> keeps existing
       modelId,
       provider: record.provider,
       inputTokens: record.inputTokens,
@@ -226,7 +230,8 @@ export async function runBackfill(
       costCacheReadMicros: cost.costCacheReadMicros,
       costCacheWriteMicros: cost.costCacheWriteMicros,
       costSource,
-      subscriptionId: subscriptionId ?? undefined,
+      // Only set subscriptionId when actually subscription_covered.
+      subscriptionId: costSource === "subscription_covered" ? (subscriptionId ?? undefined) : undefined,
     });
   }
 }
