@@ -45,6 +45,10 @@ test:
 	@pnpm --filter @token-tally/store test
 	@pnpm --filter @token-tally/claude-code-writer build
 	@pnpm --filter @token-tally/claude-code-writer test
+	@pnpm --filter @token-tally/cursor-writer build
+	@pnpm --filter @token-tally/cursor-writer test
+	@pnpm --filter @token-tally/web-explorer build:server
+	@pnpm --filter @token-tally/web-explorer test
 	@if ! xcrun --find xctest >/dev/null 2>&1; then \
 	  printf '\nERROR: xctest not found — full Xcode is required to run Swift tests.\n'; \
 	  printf '  Install Xcode from the App Store, then switch the active developer tools:\n'; \

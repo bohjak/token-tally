@@ -42,10 +42,12 @@ offered or installed when their harness is not detected.
 The installer then runs each selected component in order:
 
 1. **Store & CLI** — installs pnpm workspace dependencies, builds the
-   `@token-tally/store` TypeScript package, links the `token-tally` binary
-   globally via pnpm, and creates or migrates the central database. The global
-   binary location depends on your pnpm configuration (typically
-   `~/.local/share/pnpm/` or `~/.pnpm/`).
+   `@token-tally/store` TypeScript package as a Node.js Single Executable
+   Application (SEA), installs the binary to
+   `~/.local/share/token-tally/bin/token-tally`, and symlinks it at
+   `~/.local/bin/token-tally`. The SEA bundles a specific Node.js version so
+   the CLI is immune to Node version changes in the user's environment. The
+   step also creates or migrates the central database.
 
 2. **Drain daemon** — registers `token-tally daemon` with the platform init
    system so it runs in the background, starts at login, and restarts on
@@ -181,9 +183,10 @@ Checks:
 make test
 ```
 
-Runs the store test suite, the Claude Code writer test suite, the Cursor
-writer test suite, and the Swift tray test suite
-(`swift test --package-path clients/macos-tray`).
+Runs the store, Claude Code writer, Cursor writer, and web-explorer server
+test suites, and the Swift tray test suite
+(`swift test --package-path clients/macos-tray`). Full Xcode is required for
+the Swift tests.
 
 ---
 
@@ -200,25 +203,32 @@ the login-item state is not modified — existing preferences are preserved.
 
 ---
 
-## If pnpm's global bin is not writable
+## If the CLI binary is not writable
 
-The store step links the `token-tally` CLI with `pnpm add --global ./store`. If pnpm's
-global bin directory is under your home directory but owned by another user,
-installation fails before linking. For example:
+The store step installs the `token-tally` SEA binary to
+`~/.local/share/token-tally/bin/` and symlinks it at `~/.local/bin/token-tally`.
+If either directory is owned by another user, installation fails. For example:
 
 ```text
-EACCES: permission denied, mkdir '~/.local/share/pnpm/bin'
+cp: ~/.local/share/token-tally/bin/token-tally: Permission denied
 ```
 
-Fix the ownership of the affected user-local directory, then re-run
-`make install`:
+Fix the ownership of the affected directory, then re-run `make install`:
 
 ```sh
 sudo chown -R "$(id -un):$(id -gn)" "$HOME/.local"
 ```
 
-Do **not** run `sudo make install`; that can create more root-owned files in the
+Do **not** run `sudo make install`; that can create root-owned files in the
 repo and in your user config.
+
+If `token-tally` is not found on PATH after install, add `~/.local/bin`:
+
+```sh
+export PATH="${HOME}/.local/bin:${PATH}"
+```
+
+Add that line to `~/.zshrc` or `~/.bash_profile` to make it permanent.
 
 ---
 
@@ -369,6 +379,10 @@ make uninstall
 
 Default behaviour:
 
+- **Deregisters the drain daemon** — unloads the launchd agent (macOS) or
+  disables the systemd user service (Linux) and removes the plist/unit file.
+  This step runs before purge so the daemon is stopped before its binary
+  directory is deleted.
 - Quits ToTally if it is running.
 - Removes `/Applications/ToTally.app` (if installed by this repo).
 - Removes Pi extension symlinks `~/.pi/agent/extensions/token-tally-*`.
@@ -379,6 +393,10 @@ Default behaviour:
 - Removes the install manifest `~/.config/token-tally/install.json`.
 - **Prints** the paths of user data but does **not** delete them.
 - **Never touches** `~/.pi/analytics/events.db`.
+
+Each section is failure-tolerant: a single failing component (e.g.
+`/Applications` not writable) is reported at the end but does not abort
+removal of the remaining components.
 
 ### Keeping specific components
 

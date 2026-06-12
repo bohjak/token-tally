@@ -184,6 +184,8 @@ remove_claude_code_hooks() {
   TT_CC_SETTINGS_PATH="${settings_path}" python3 - <<'PY'
 import json
 import os
+import shutil
+import time
 from pathlib import Path
 
 settings_path = Path(os.environ["TT_CC_SETTINGS_PATH"])
@@ -239,9 +241,17 @@ for event in list(hooks_root.keys()):
         changed = True
 
 if changed:
-    with settings_path.open("w") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
+    backup = settings_path.with_name(settings_path.name + ".bak-" + str(int(time.time())))
+    shutil.copy2(settings_path, backup)
+    tmp = settings_path.with_suffix(".json.tmp")
+    try:
+        with tmp.open("w") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+        tmp.replace(settings_path)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
 PY
   info "Removed ToTally Claude Code hooks from ${settings_path}"
 }
@@ -279,6 +289,8 @@ remove_cursor_hooks() {
   TT_CURSOR_HOOKS_PATH="${hooks_path}" python3 - <<'PY'
 import json
 import os
+import shutil
+import time
 from pathlib import Path
 
 hooks_path = Path(os.environ["TT_CURSOR_HOOKS_PATH"])
@@ -318,9 +330,17 @@ for event in list(hooks_root.keys()):
         del hooks_root[event]
 
 if changed:
-    with hooks_path.open("w") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
+    backup = hooks_path.with_name(hooks_path.name + ".bak-" + str(int(time.time())))
+    shutil.copy2(hooks_path, backup)
+    tmp = hooks_path.with_suffix(".json.tmp")
+    try:
+        with tmp.open("w") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+        tmp.replace(hooks_path)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
 PY
   info "Removed ToTally Cursor hooks from ${hooks_path}"
 }
@@ -333,6 +353,47 @@ remove_manifest() {
   else
     info "Manifest not found — nothing to remove"
   fi
+}
+
+# Unload and remove the drain daemon from launchd (macOS) or systemd (Linux).
+# Must run before --purge, which deletes the daemon binary from TOKEN_TALLY_DATA_DIR.
+remove_daemon() {
+  case "$(uname -s)" in
+    Darwin)
+      local plist_label="com.token-tally.daemon"
+      local plist_path="${HOME}/Library/LaunchAgents/${plist_label}.plist"
+      # bootout unloads and removes the job; tolerate not-loaded (exit non-zero).
+      if launchctl bootout "gui/$(id -u)/${plist_label}" 2>/dev/null; then
+        info "Daemon unloaded from launchd"
+      else
+        info "Daemon was not loaded in launchd (already stopped or never installed)"
+      fi
+      if [[ -f "${plist_path}" ]]; then
+        rm "${plist_path}"
+        info "Removed launchd plist ${plist_path}"
+      else
+        info "launchd plist not found -- nothing to remove"
+      fi
+      ;;
+    Linux)
+      local unit_path="${HOME}/.config/systemd/user/token-tally-daemon.service"
+      if command -v systemctl &>/dev/null; then
+        # Tolerate unit-not-found / not-active errors (various non-zero exit codes).
+        systemctl --user disable --now token-tally-daemon 2>/dev/null || true
+        info "Daemon disabled via systemd --user"
+        systemctl --user daemon-reload 2>/dev/null || true
+      fi
+      if [[ -f "${unit_path}" ]]; then
+        rm "${unit_path}"
+        info "Removed systemd unit ${unit_path}"
+      else
+        info "systemd unit not found -- nothing to remove"
+      fi
+      ;;
+    *)
+      info "Unsupported platform -- skipping daemon deregistration"
+      ;;
+  esac
 }
 
 # Purge user data after confirmation.
@@ -369,14 +430,19 @@ purge_user_data() {
 
 main() {
   parse_args "$@"
+  local -a _failures=()
 
   section "ToTally uninstall"
+
+  # ---- Daemon (must run before purge to avoid deleting the binary first) ----
+  section "Drain daemon"
+  remove_daemon || _failures+=("drain daemon deregistration")
 
   # ---- App ----
   section "Tray app"
   if [[ "${OPT_KEEP_APP}" == "false" ]]; then
     quit_if_running
-    remove_app
+    remove_app || _failures+=("tray app removal")
   else
     info "Skipping tray removal (--keep-app)"
   fi
@@ -384,7 +450,7 @@ main() {
   # ---- Pi ----
   section "Pi extensions"
   if [[ "${OPT_KEEP_PI}" == "false" ]]; then
-    remove_pi_symlinks
+    remove_pi_symlinks || _failures+=("Pi extension removal")
   else
     info "Skipping Pi extension removal (--keep-pi)"
   fi
@@ -392,7 +458,7 @@ main() {
   # ---- Claude Code ----
   section "Claude Code hooks"
   if [[ "${OPT_KEEP_CLAUDE_CODE}" == "false" ]]; then
-    remove_claude_code_hooks
+    remove_claude_code_hooks || _failures+=("Claude Code hook removal")
   else
     info "Skipping Claude Code hook removal (--keep-claude-code)"
   fi
@@ -400,19 +466,19 @@ main() {
   # ---- Cursor ----
   section "Cursor hooks"
   if [[ "${OPT_KEEP_CURSOR}" == "false" ]]; then
-    remove_cursor_hooks
+    remove_cursor_hooks || _failures+=("Cursor hook removal")
   else
     info "Skipping Cursor hook removal (--keep-cursor)"
   fi
 
   # ---- Manifest ----
   section "Install manifest"
-  remove_manifest
+  remove_manifest || _failures+=("manifest removal")
 
   # ---- User data ----
   section "User data"
   if [[ "${OPT_PURGE}" == "true" ]]; then
-    purge_user_data
+    purge_user_data || _failures+=("data purge")
   else
     echo    "  User data NOT deleted (pass --purge to also remove):"
     [[ -d "${TOKEN_TALLY_DATA_DIR}" ]]  && echo "    ${TOKEN_TALLY_DATA_DIR}/"
@@ -431,7 +497,15 @@ main() {
   fi
 
   echo
-  info "Uninstall complete."
+  if [[ "${#_failures[@]}" -gt 0 ]]; then
+    err "Some components failed to uninstall:"
+    for _f in "${_failures[@]}"; do
+      err "  - ${_f}"
+    done
+    exit 1
+  else
+    info "Uninstall complete."
+  fi
 }
 
 main "$@"

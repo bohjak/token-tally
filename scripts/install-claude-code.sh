@@ -138,9 +138,16 @@ for event in events:
     })
     hooks_root[event] = cleaned
 
-with settings_path.open("w") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
+# Atomic write via temp file + rename (mirrors install-cursor.sh merge_hooks).
+tmp = settings_path.with_suffix(".json.tmp")
+try:
+    with tmp.open("w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    tmp.replace(settings_path)
+except Exception:
+    tmp.unlink(missing_ok=True)
+    raise
 PY
 }
 

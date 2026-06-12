@@ -24,7 +24,7 @@ attack surface is:
 
 - The SQLite database at `~/.local/share/token-tally/events.db`
 - The NDJSON spool files at `~/.local/share/token-tally/spool/`
-- The `token-tally` CLI binary installed via pnpm
+- The `token-tally` CLI binary at `~/.local/share/token-tally/bin/` (symlinked from `~/.local/bin/`)
 
 All of these are owned by and accessible only to the local user who ran
 `make install`.

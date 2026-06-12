@@ -77,9 +77,9 @@ database, rebuilds the app, and updates extension symlinks automatically.
 - **Command Line Tools for Xcode** (or full Xcode) — for the Swift build
   - Full Xcode is required to run Swift tests (`make test`)
 - **Node.js ≥ 24** — for the store CLI
-- **pnpm** — installed automatically if absent (`npm install -g pnpm`); the
-  global binary lands wherever pnpm puts it on your system (typically
-  `~/.local/share/pnpm/` or `~/.pnpm/` depending on your setup)
+- **pnpm** — must be installed before running `make install`
+  (`npm install -g pnpm`); used to build packages, but the installed CLI is a
+  self-contained SEA binary, not a pnpm-managed global
 
 The installer checks for these and prints a clear error if anything is missing.
 
@@ -95,7 +95,7 @@ The installer checks for these and prints a clear error if anything is missing.
 | Pi usage client | `~/.pi/agent/extensions/token-tally-usage` → `<repo>/clients/pi-usage-command` |
 | Claude Code hook | `~/.local/bin/token-tally-claude-hook` → `<repo>/harnesses/claude-code/writer/dist/bin/token-tally-claude-hook.js` |
 | Cursor hook | `~/.local/bin/token-tally-cursor-hook` → `<repo>/harnesses/cursor/writer/dist/bin/token-tally-cursor-hook.js` |
-| CLI binary | wherever pnpm places global binaries on your system |
+| CLI binary | `~/.local/share/token-tally/bin/token-tally` (symlinked from `~/.local/bin/token-tally`) |
 | Install manifest | `~/.config/token-tally/install.json` |
 
 All extension paths are symlinks back to the repo, so `git pull && make install`
@@ -120,6 +120,9 @@ make test     # run Swift and store tests
 
 `make doctor` checks the CLI binary, database health, tray app installation, Pi
 extension symlinks, and the install manifest.
+
+`make test` runs the store, Claude Code writer, Cursor writer, and web-explorer
+server test suites, plus the Swift tray tests (requires full Xcode).
 
 ---
 

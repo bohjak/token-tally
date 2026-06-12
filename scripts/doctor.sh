@@ -51,6 +51,36 @@ WARN_COUNT=0
 FAIL_COUNT=0
 
 # ---------------------------------------------------------------------------
+# Manifest helpers
+# ---------------------------------------------------------------------------
+
+# Returns 0 (true) if the named component was intentionally not installed per
+# the install manifest (installed: false with a reason).  Returns 1 otherwise.
+# Usage: manifest_component_skipped "tray" / "claudeCode" / "cursor" / "pi"
+manifest_component_skipped() {
+  local component="$1"
+  if [[ ! -f "${MANIFEST_PATH}" ]]; then
+    return 1  # No manifest -- treat as unknown; existing fail logic applies.
+  fi
+  local result
+  result=$(TT_MANIFEST_PATH="${MANIFEST_PATH}" TT_COMPONENT="${component}" python3 - <<'PY'
+import json, os
+try:
+    with open(os.environ["TT_MANIFEST_PATH"]) as f:
+        data = json.load(f)
+    comp = data.get("components", {}).get(os.environ["TT_COMPONENT"], {})
+    if isinstance(comp, dict) and comp.get("installed") is False:
+        print("SKIPPED")
+    else:
+        print("NOT_SKIPPED")
+except Exception:
+    print("UNKNOWN")
+PY
+) || result="UNKNOWN"
+  [[ "${result}" == "SKIPPED" ]]
+}
+
+# ---------------------------------------------------------------------------
 # Checks
 # ---------------------------------------------------------------------------
 
@@ -69,7 +99,7 @@ check_store_cli() {
     if [[ -f "${REPO_ROOT}/store/bin/token-tally.js" ]] && command -v node &>/dev/null; then
       cli_cmd=(node "${REPO_ROOT}/store/bin/token-tally.js")
       warn "token-tally not in PATH; falling back to node invocation"
-      warn "Add '$(pnpm bin -g 2>/dev/null || echo "pnpm global bin")' to PATH"
+      warn "Add '${HOME}/.local/bin' to PATH (e.g. export PATH=\"\${HOME}/.local/bin:\${PATH}\")"
     else
       fail "token-tally not found in PATH and node fallback unavailable"
       return
@@ -194,6 +224,8 @@ check_tray() {
     version=$(defaults read "${app_path}/Contents/Info" CFBundleShortVersionString \
       2>/dev/null) || version="(unknown)"
     pass "ToTally.app installed at ${app_path} (v${version})"
+  elif manifest_component_skipped "tray"; then
+    info "ToTally.app not installed (skipped per install manifest)"
   else
     fail "ToTally.app not found at ${app_path}"
     fail "  Run 'make install' to install it."
@@ -209,19 +241,21 @@ check_pi_extensions() {
     return
   fi
 
-  local all_ok=true
+  if manifest_component_skipped "pi"; then
+    info "Pi integration not installed (skipped per install manifest)"
+    return
+  fi
+
   for name in token-tally-writer token-tally-usage; do
     local link_path="${pi_ext_dir}/${name}"
 
     if [[ ! -e "${link_path}" && ! -L "${link_path}" ]]; then
       fail "${name}: not installed at ${link_path}"
-      all_ok=false
       continue
     fi
 
     if [[ ! -L "${link_path}" ]]; then
       fail "${name}: exists but is not a symlink — unexpected state"
-      all_ok=false
       continue
     fi
 
@@ -229,7 +263,6 @@ check_pi_extensions() {
     target=$(readlink "${link_path}")
     if [[ ! -e "${target}" ]]; then
       fail "${name}: symlink target missing (${target})"
-      all_ok=false
       continue
     fi
 
@@ -246,6 +279,11 @@ check_claude_code() {
 
   if [[ ! -d "${claude_dir}" ]]; then
     info "Claude Code not installed — skipping Claude Code checks"
+    return
+  fi
+
+  if manifest_component_skipped "claudeCode"; then
+    info "Claude Code hooks not installed (skipped per install manifest)"
     return
   fi
 
@@ -369,6 +407,11 @@ check_cursor() {
 
   if [[ ! -d "${cursor_dir}" ]]; then
     info "Cursor not installed — skipping Cursor checks"
+    return
+  fi
+
+  if manifest_component_skipped "cursor"; then
+    info "Cursor hooks not installed (skipped per install manifest)"
     return
   fi
 

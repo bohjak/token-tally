@@ -103,12 +103,17 @@ check_typecheck() {
     return
   fi
 
-  # Typecheck every workspace package that has a tsconfig.
+  # Typecheck every workspace package.
+  # Each package has a "typecheck" script in package.json; using it is preferred
+  # over bare "tsc --noEmit" because some packages (e.g. clients/web-explorer)
+  # have multiple tsconfigs covered by the script.
   local packages=(
     "store"
     "harnesses/pi/writer-extension"
     "harnesses/cursor/writer"
+    "harnesses/claude-code/writer"
     "clients/pi-usage-command"
+    "clients/web-explorer"
   )
 
   for pkg in "${packages[@]}"; do
@@ -117,7 +122,7 @@ check_typecheck() {
       warn "${pkg}: no tsconfig.json — skipping typecheck"
       continue
     fi
-    if (cd "${pkg_dir}" && pnpm exec tsc --noEmit 2>&1); then
+    if (cd "${pkg_dir}" && pnpm run typecheck 2>&1); then
       pass "${pkg}: typecheck passed"
     else
       fail "${pkg}: typecheck failed"
@@ -213,6 +218,32 @@ check_pricing() {
   else
     fail "pricing: rates.json is out of sync or sources are stale. " \
       "Run 'pnpm exec tsx scripts/generate-pricing.ts' to regenerate and update asOf dates."
+  fi
+}
+
+check_claude_code_writer_tests() {
+  section "Claude Code writer tests"
+
+  if ! command -v pnpm &>/dev/null; then
+    warn "pnpm not found — skipping Claude Code writer tests"
+    return
+  fi
+
+  local cc_writer_dir="${REPO_ROOT}/harnesses/claude-code/writer"
+  if [[ ! -f "${cc_writer_dir}/package.json" ]]; then
+    warn "Claude Code writer package not found at harnesses/claude-code/writer — skipping"
+    return
+  fi
+
+  if ! (cd "${REPO_ROOT}" && pnpm --filter @token-tally/claude-code-writer build 2>&1); then
+    fail "Claude Code writer: build failed — cannot run tests"
+    return
+  fi
+
+  if (cd "${REPO_ROOT}" && pnpm --filter @token-tally/claude-code-writer test 2>&1); then
+    pass "Claude Code writer tests: all passed"
+  else
+    fail "Claude Code writer tests: one or more tests failed"
   fi
 }
 
@@ -320,6 +351,7 @@ main() {
   check_swift_tests
   check_shellcheck
   check_pricing
+  check_claude_code_writer_tests
   check_cursor_writer_tests
   check_perf
 
