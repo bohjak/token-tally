@@ -515,19 +515,28 @@ describe("pi-session importer integration", () => {
     assert.ok(result.ok, `import failed: ${result.ok ? "" : result.error}`);
     if (!result.ok) return;
 
+    // The pre-existing synthesized live-writer row is canonicalized to the
+    // provider responseId in place — exactly one row, same session attribution.
     const db2 = openDb(dbPath);
     const importedShared = /** @type {any[]} */ (
-      db2.prepare("SELECT id FROM llm_messages WHERE harness_message_id = ?")
+      db2.prepare("SELECT id, session_id FROM llm_messages WHERE harness_message_id = ?")
         .all("resp_shared_replay_01")
     );
+    const synthesizedRows = /** @type {any[]} */ (
+      db2.prepare("SELECT id FROM llm_messages WHERE harness_message_id = ?")
+        .all(`${forkAPath}:t0:m0`)
+    );
     db2.close();
-    assert.equal(importedShared.length, 0, "shared boundary responseId must not be imported later as replay");
+    assert.equal(importedShared.length, 1, "shared boundary responseId should map to exactly one row");
+    assert.equal(importedShared[0].session_id, sessionId, "canonicalized row keeps live-writer attribution");
+    assert.equal(synthesizedRows.length, 0, "synthesized ID should be upgraded in place");
 
     const forkAResult = result.result.sessions.find((s) => s.filePath.endsWith("fork-a.jsonl"));
     const forkBResult = result.result.sessions.find((s) => s.filePath.endsWith("fork-b.jsonl"));
     assert.ok(forkAResult != null);
     assert.ok(forkBResult != null);
     assert.equal(forkAResult.counts.messagesBoundarySkipped, 1, "fork-a shared row should boundary-skip");
+    assert.equal(forkAResult.counts.messagesIdCanonicalized, 1, "fork-a synthesized row should be canonicalized");
     assert.equal(forkBResult.counts.messagesReplaySkipped, 1, "fork-b shared row should replay-skip");
   });
 
@@ -662,6 +671,98 @@ describe("pi-session importer integration", () => {
     assert.ok(liveRow != null, "live writer row should still exist");
     assert.equal(liveRow.session_id, sessionId, "live writer row session_id must not change");
     assert.equal(liveRow.turn_id, turnId, "live writer row turn_id must not change");
+  });
+
+  test("boundary match canonicalizes synthesized live-writer IDs to the provider responseId", async () => {
+    const dbPath = join(tmp.dir, "import-canonicalize.db");
+    const { mkdirSync, copyFileSync } = require("node:fs");
+    const root = join(tmp.dir, "canonicalize-sessions", "myproject");
+    mkdirSync(root, { recursive: true });
+    const copyPath = join(root, "2026-06-09T14:05:17.405Z_simpletest.jsonl");
+    copyFileSync(F.simple, copyPath);
+
+    const { AnalyticsWriter } = require("../dist/src/index");
+    const setupWriter = await AnalyticsWriter.open({ dbPath, harnessName: "token-tally-import" });
+    await setupWriter.close();
+
+    // Seed a synthesized live-writer row matching the first fixture message
+    // (payload identical, ts +7s like the live writer hook stamp).
+    const db = openDb(dbPath);
+    db.prepare(
+      "INSERT OR IGNORE INTO harnesses (name, display_name, first_seen_at, last_seen_at) VALUES ('pi', 'Pi', ?, ?)",
+    ).run(Date.now(), Date.now());
+    const sessionId = require("crypto").randomUUID();
+    const turnId = require("crypto").randomUUID();
+    const liveRowId = require("crypto").randomUUID();
+    db.prepare(
+      `INSERT INTO sessions (id, harness_id, harness_session_id, session_file, cwd, started_at)
+       VALUES (?, 'pi', ?, ?, ?, ?)`,
+    ).run(sessionId, copyPath, copyPath, "/home/user/projects/myproject", 1749470737000);
+    db.prepare(
+      `INSERT INTO turns (id, session_id, harness_id, harness_turn_id, turn_index, started_at)
+       VALUES (?, ?, 'pi', ?, 0, ?)`,
+    ).run(turnId, sessionId, `${copyPath}:t0`, 1749470737000);
+    db.prepare(
+      `INSERT INTO llm_messages (
+         id, session_id, turn_id, harness_id, harness_message_id, ts,
+         provider, model_id,
+         input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+         cost_input_micros, cost_output_micros, cost_cache_read_micros, cost_cache_write_micros,
+         cost_total_micros, cost_currency, cost_source
+       ) VALUES (?, ?, ?, 'pi', ?, ?, 'anthropic', 'claude-opus-4-8',
+                 100, 50, 0, 16880,
+                 300, 3750, 0, 63300,
+                 67350, 'USD', 'harness')`,
+    ).run(liveRowId, sessionId, turnId, `${copyPath}:t0:m0`, 1749470737000 + 7000);
+    db.close();
+
+    // Dry-run first: reports the would-be canonicalization without writing.
+    const dryRun = await importPiSessionLogs({
+      sessionsPath: join(tmp.dir, "canonicalize-sessions"),
+      dbPath,
+      dryRun: true,
+    });
+    assert.ok(dryRun.ok, `dry-run failed: ${dryRun.ok ? "" : dryRun.error}`);
+    if (!dryRun.ok) return;
+    assert.equal(dryRun.result.totals.idCanonicalized, 1, "dry-run should report 1 would-be canonicalization");
+
+    const dbAfterDry = openDb(dbPath);
+    const dryRow = /** @type {any} */ (
+      dbAfterDry.prepare("SELECT harness_message_id FROM llm_messages WHERE id = ?").get(liveRowId)
+    );
+    dbAfterDry.close();
+    assert.equal(dryRow.harness_message_id, `${copyPath}:t0:m0`, "dry-run must not modify rows");
+
+    // Real import: upgrades the synthesized ID in place.
+    const result = await importPiSessionLogs({
+      sessionsPath: join(tmp.dir, "canonicalize-sessions"),
+      dbPath,
+    });
+    assert.ok(result.ok, `import failed: ${result.ok ? "" : result.error}`);
+    if (!result.ok) return;
+
+    assert.equal(result.result.totals.idCanonicalized, 1);
+    assert.equal(result.result.totals.boundarySkipped, 1);
+
+    const db2 = openDb(dbPath);
+    const row = /** @type {any} */ (
+      db2.prepare(
+        "SELECT harness_message_id, session_id, turn_id FROM llm_messages WHERE id = ?",
+      ).get(liveRowId)
+    );
+    const allIds = /** @type {any[]} */ (
+      db2.prepare("SELECT harness_message_id FROM llm_messages ORDER BY ts").all()
+    );
+    db2.close();
+
+    assert.equal(row.harness_message_id, "resp_simpletest01", "synthesized ID upgraded to responseId");
+    assert.equal(row.session_id, sessionId, "canonicalized row keeps session attribution");
+    assert.equal(row.turn_id, turnId, "canonicalized row keeps turn attribution");
+    // Second fixture message imported normally; exactly two rows, no duplicates.
+    assert.deepEqual(
+      allIds.map((r) => r.harness_message_id).sort(),
+      ["resp_simpletest01", "resp_simpletest02"],
+    );
   });
 
   test("boundary tool-call: tool calls in skipped messages are not inserted", async () => {

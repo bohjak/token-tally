@@ -228,6 +228,11 @@ export interface SessionImportCounts {
   messagesZeroCostSkipped: number;
   /** Skipped due to matching an existing DB row for this session path. */
   messagesBoundarySkipped: number;
+  /**
+   * Boundary-skipped rows whose existing DB harness_message_id was upgraded
+   * to the canonical provider responseId from the session log.
+   */
+  messagesIdCanonicalized: number;
   /** Skipped because tsMs >= untilMs. */
   messagesCutoffSkipped: number;
   /** Tool calls written. */
@@ -262,6 +267,7 @@ export interface PiSessionImportResult {
     replaysSkipped: number;
     zeroCostSkipped: number;
     boundarySkipped: number;
+    idCanonicalized: number;
     cutoffSkipped: number;
     totalParsedAssistantUsage: number;
     importedCostMicros: number;

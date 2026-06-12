@@ -96,6 +96,11 @@ function printImportReport(r: PiSessionImportResult): void {
   process.stdout.write(
     `  boundary_skipped:  ${t.boundarySkipped} messages  ($${boundaryUsd})\n`,
   );
+  if (t.idCanonicalized > 0) {
+    process.stdout.write(
+      `  ids_canonicalized: ${t.idCanonicalized} boundary rows upgraded to provider IDs\n`,
+    );
+  }
   process.stdout.write(
     `  cutoff_skipped:    ${t.cutoffSkipped} messages  ($${cutoffUsd})\n`,
   );

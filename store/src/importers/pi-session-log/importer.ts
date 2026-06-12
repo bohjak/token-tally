@@ -246,6 +246,7 @@ async function importOneSession(
     messagesReplaySkipped: 0,
     messagesZeroCostSkipped: 0,
     messagesBoundarySkipped: 0,
+    messagesIdCanonicalized: 0,
     messagesCutoffSkipped: 0,
     toolCallsImported: 0,
     toolCallsSkipped: 0,
@@ -263,6 +264,8 @@ async function importOneSession(
     msg: TransformedMessage;
     turn: TransformedTurn;
     disposition: "import" | "zero_cost_skip" | "replay_skip" | "boundary_skip" | "cutoff_skip";
+    /** The consumed DB row for boundary_skip decisions (canonicalization target). */
+    boundaryDbRow?: DbMessage;
   };
   const decisions: MsgDecision[] = [];
 
@@ -302,8 +305,8 @@ async function importOneSession(
         boundarySkippedCostMicros += msg.costTotalMicros;
         if (msg.responseId != null) seenResponseIds.add(msg.responseId);
         // Consume this DB row (one-consumption semantics).
-        availableDbMessages.splice(boundaryMatchIdx, 1);
-        decisions.push({ msg, turn, disposition: "boundary_skip" });
+        const [boundaryDbRow] = availableDbMessages.splice(boundaryMatchIdx, 1);
+        decisions.push({ msg, turn, disposition: "boundary_skip", boundaryDbRow });
         continue;
       }
 
@@ -355,6 +358,15 @@ async function importOneSession(
           }
         }
       } else {
+        // Count would-be ID canonicalizations for boundary matches.
+        if (
+          d.disposition === "boundary_skip" &&
+          d.boundaryDbRow != null &&
+          d.msg.responseId != null &&
+          isSynthesizedPiMessageId(d.boundaryDbRow.harness_message_id, filePath)
+        ) {
+          counts.messagesIdCanonicalized++;
+        }
         // Tool calls in skipped messages are also skipped.
         counts.toolCallsSkipped += d.msg.toolCalls.length;
       }
@@ -384,6 +396,8 @@ type MsgDecision = {
   msg: TransformedMessage;
   turn: TransformedTurn;
   disposition: "import" | "zero_cost_skip" | "replay_skip" | "boundary_skip" | "cutoff_skip";
+  /** The consumed DB row for boundary_skip decisions (canonicalization target). */
+  boundaryDbRow?: DbMessage;
 };
 
 function writeSessionTransaction(
@@ -450,6 +464,19 @@ function writeSessionTransaction(
     )
   `);
 
+  // Canonicalize a boundary-matched live-writer row to the provider responseId.
+  // Guarded by NOT EXISTS so the UNIQUE (harness_id, harness_message_id)
+  // constraint can never fire when a provider-ID row already exists.
+  const stmtCanonicalizeMessageId = db.prepare(`
+    UPDATE llm_messages
+    SET harness_message_id = $newId
+    WHERE id = $rowId
+      AND NOT EXISTS (
+        SELECT 1 FROM llm_messages
+        WHERE harness_id = $harnessId AND harness_message_id = $newId
+      )
+  `);
+
   // INSERT OR IGNORE: never clobber live writer tool call rows.
   const stmtInsertToolCall = db.prepare(`
     INSERT OR IGNORE INTO tool_calls
@@ -505,12 +532,25 @@ function writeSessionTransaction(
       // Write messages and their tool calls.
       for (const d of decisions) {
         if (d.disposition !== "import") {
-          // Tool calls in skipped messages are also skipped.
-          if (d.disposition !== "zero_cost_skip") {
-            counts.toolCallsSkipped += d.msg.toolCalls.length;
-          } else {
-            counts.toolCallsSkipped += d.msg.toolCalls.length;
+          // Boundary matches: upgrade synthesized live-writer IDs to the
+          // canonical provider responseId so both representations of the same
+          // model call share one identity.
+          if (
+            d.disposition === "boundary_skip" &&
+            d.boundaryDbRow != null &&
+            d.msg.responseId != null &&
+            isSynthesizedPiMessageId(d.boundaryDbRow.harness_message_id, transformed.filePath)
+          ) {
+            const updated = stmtCanonicalizeMessageId.run({
+              rowId: d.boundaryDbRow.id,
+              newId: d.msg.responseId,
+              harnessId: HARNESS_ID,
+            });
+            if (updated.changes > 0) counts.messagesIdCanonicalized++;
           }
+
+          // Tool calls in skipped messages are also skipped.
+          counts.toolCallsSkipped += d.msg.toolCalls.length;
           continue;
         }
 
@@ -636,6 +676,8 @@ function lookupExistingSession(
 }
 
 interface DbMessage {
+  id: string;
+  harness_message_id: string;
   input_tokens: number;
   output_tokens: number;
   cache_read_tokens: number;
@@ -654,7 +696,8 @@ function loadExistingMessages(
 ): DbMessage[] {
   return db
     .prepare(
-      `SELECT input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+      `SELECT id, harness_message_id,
+              input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
               model_id,
               cost_input_micros, cost_output_micros,
               cost_cache_read_micros, cost_cache_write_micros,
@@ -676,6 +719,19 @@ function loadExistingToolCallIds(
     )
     .all(sessionId, HARNESS_ID) as Array<{ harness_tool_call_id: string }>;
   return new Set(rows.map((r) => r.harness_tool_call_id));
+}
+
+/**
+ * True when `harnessMessageId` is a synthesized (non-provider) ID for the
+ * given session file: either the live writer's `<file>:tN:mM` form or the
+ * importer's `<file>:noid:<eventId>` form. Provider IDs (msg_... / resp_...)
+ * never start with the session file path, so they are never renamed.
+ */
+function isSynthesizedPiMessageId(
+  harnessMessageId: string,
+  sessionFile: string,
+): boolean {
+  return harnessMessageId.startsWith(`${sessionFile}:`);
 }
 
 // ---------------------------------------------------------------------------
@@ -732,6 +788,7 @@ function makeEmptyResult(dryRun: boolean, dbPath: string): PiSessionImportResult
       replaysSkipped: 0,
       zeroCostSkipped: 0,
       boundarySkipped: 0,
+      idCanonicalized: 0,
       cutoffSkipped: 0,
       totalParsedAssistantUsage: 0,
       importedCostMicros: 0,
@@ -754,6 +811,7 @@ function buildResult(
     replaysSkipped: 0,
     zeroCostSkipped: 0,
     boundarySkipped: 0,
+    idCanonicalized: 0,
     cutoffSkipped: 0,
     totalParsedAssistantUsage: 0,
     importedCostMicros: 0,
@@ -769,6 +827,7 @@ function buildResult(
     totals.replaysSkipped += s.counts.messagesReplaySkipped;
     totals.zeroCostSkipped += s.counts.messagesZeroCostSkipped;
     totals.boundarySkipped += s.counts.messagesBoundarySkipped;
+    totals.idCanonicalized += s.counts.messagesIdCanonicalized;
     totals.cutoffSkipped += s.counts.messagesCutoffSkipped;
     totals.totalParsedAssistantUsage += s.counts.totalParsedAssistantUsage;
     totals.importedCostMicros += s.importedCostMicros;

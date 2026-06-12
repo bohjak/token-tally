@@ -28,6 +28,8 @@ export type { SpoolRecord, DrainResult, BoundedDrainOptions, PromoteResult, Prom
 // T6 — doctor, ingest
 export { runDoctor, formatDoctorReport, repairDoctorFindings, formatDoctorRepairReport } from "./doctor";
 export type { DoctorReport, DoctorRepairReport, Finding, FindingSeverity, RepairAction } from "./doctor";
+export { comparePiSessionLogs, compareSessionLogs, formatPiCanonicalIdRepairReport, formatPiSessionLogCompareReport, formatSessionLogCompareReport, repairPiCanonicalIds } from "./doctor-pi-compare";
+export type { PiCanonicalIdRepairAction, PiCanonicalIdRepairOptions, PiCanonicalIdRepairReport, PiSessionLogCompareOptions, PiSessionLogCompareReport, PiSessionLogCompareTotals, SessionLogCompareOptions, SessionLogCompareReport } from "./doctor-pi-compare";
 export { ingestFile, ingestDir } from "./ingest";
 export type { IngestOptions, IngestResult } from "./ingest";
 

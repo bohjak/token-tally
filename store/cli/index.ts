@@ -20,6 +20,7 @@ import { pathToFileURL } from "url";
 import { cmdImportLegacyPi } from "./import-legacy-pi";
 import { cmdImportPiSessions } from "./import-pi-sessions";
 import { formatDoctorRepairReport, formatDoctorReport, repairDoctorFindings, runDoctor } from "../src/doctor";
+import { compareSessionLogs, formatPiCanonicalIdRepairReport, formatSessionLogCompareReport, repairPiCanonicalIds } from "../src/doctor-pi-compare";
 import { ingestDir, ingestFile } from "../src/ingest";
 import type { IngestOptions } from "../src/ingest";
 import { defaultConfigDir, defaultDatabasePath, defaultSpoolDir, defaultStateDir } from "../src/paths";
@@ -258,9 +259,51 @@ export async function main(argv: string[]): Promise<number> {
           .option("yes", {
             type: "boolean",
             describe: "Apply --repair changes. Without this flag, repair is a dry-run.",
+          })
+          .option("compare-sessions", {
+            type: "boolean",
+            describe: "Compare DB rows against supported harness session logs. Defaults to the last 24 hours.",
+          })
+          .option("compare-pi-sessions", {
+            type: "boolean",
+            describe: "Alias for --compare-sessions --harness pi.",
+          })
+          .option("repair-canonical-ids", {
+            type: "boolean",
+            describe:
+              "[--compare-sessions] Canonicalize synthesized Pi message IDs to provider response IDs from session logs. Dry-run unless --yes is also passed.",
+          })
+          .option("harness", {
+            type: "array",
+            describe: "[--compare-sessions] Harness(es) to compare, e.g. --harness pi. Default: all supported.",
+          })
+          .option("path", {
+            type: "string",
+            describe: "[--compare-sessions] Pi sessions root. Default: ~/.pi/agent/sessions",
+          })
+          .option("from", {
+            type: "string",
+            describe: "[--compare-sessions] UTC date (YYYY-MM-DD) or ISO instant for window start. Default: 24h before --to/now.",
+          })
+          .option("to", {
+            type: "string",
+            describe: "[--compare-sessions] UTC date (YYYY-MM-DD) or ISO instant for window end. Default: now.",
           }),
       async (args) => {
-        exitCode = await cmdDoctor(args.json === true, args.db, args.repair === true, args.yes === true);
+        exitCode = await cmdDoctor({
+          jsonMode: args.json === true,
+          dbPathOverride: args.db,
+          repairMode: args.repair === true,
+          applyRepair: args.yes === true,
+          compareSessions: args["compare-sessions"] === true || args["compare-pi-sessions"] === true,
+          repairCanonicalIds: args["repair-canonical-ids"] === true,
+          harnesses: args["compare-pi-sessions"] === true
+            ? ["pi"]
+            : (args.harness as string[] | undefined),
+          piSessionsPath: args.path as string | undefined,
+          from: args.from as string | undefined,
+          to: args.to as string | undefined,
+        });
       },
     )
 
@@ -945,17 +988,65 @@ async function cmdIngestDir(
 // doctor
 // ---------------------------------------------------------------------------
 
-async function cmdDoctor(
-  jsonMode: boolean,
-  dbPathOverride: string | undefined,
-  repairMode: boolean,
-  applyRepair: boolean,
-): Promise<number> {
-  const dbPath = dbPathOverride ?? defaultDatabasePath();
+async function cmdDoctor(args: {
+  jsonMode: boolean;
+  dbPathOverride: string | undefined;
+  repairMode: boolean;
+  applyRepair: boolean;
+  compareSessions: boolean;
+  repairCanonicalIds: boolean;
+  harnesses: string[] | undefined;
+  piSessionsPath: string | undefined;
+  from: string | undefined;
+  to: string | undefined;
+}): Promise<number> {
+  const dbPath = args.dbPathOverride ?? defaultDatabasePath();
 
-  if (repairMode) {
-    const report = repairDoctorFindings(dbPath, applyRepair);
-    if (jsonMode) {
+  if (args.repairCanonicalIds && !args.compareSessions) {
+    process.stderr.write("token-tally doctor: --repair-canonical-ids requires --compare-sessions.\n");
+    return 1;
+  }
+
+  if (args.compareSessions) {
+    if (args.repairMode) {
+      process.stderr.write("token-tally doctor: --compare-sessions cannot be combined with --repair.\n");
+      return 1;
+    }
+
+    if (args.repairCanonicalIds) {
+      const repairReport = repairPiCanonicalIds({
+        dbPath,
+        sessionsPath: args.piSessionsPath,
+        from: args.from,
+        to: args.to,
+        apply: args.applyRepair,
+      });
+      if (args.jsonMode) {
+        process.stdout.write(JSON.stringify(repairReport, null, 2) + "\n");
+      } else {
+        process.stdout.write(formatPiCanonicalIdRepairReport(repairReport) + "\n");
+      }
+      return repairReport.status === "error" ? 1 : 0;
+    }
+
+    const report = compareSessionLogs({
+      dbPath,
+      harnesses: args.harnesses,
+      piSessionsPath: args.piSessionsPath,
+      from: args.from,
+      to: args.to,
+    });
+    if (args.jsonMode) {
+      process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+    } else {
+      process.stdout.write(formatSessionLogCompareReport(report) + "\n");
+    }
+    return report.status === "error" ? 1 : 0;
+  }
+
+  if (args.repairMode) {
+    const report = repairDoctorFindings(dbPath, args.applyRepair);
+    if (args.jsonMode) {
       process.stdout.write(JSON.stringify(report, null, 2) + "\n");
     } else {
       process.stdout.write(formatDoctorRepairReport(report) + "\n");
@@ -965,7 +1056,7 @@ async function cmdDoctor(
 
   const report = runDoctor(dbPath);
 
-  if (jsonMode) {
+  if (args.jsonMode) {
     process.stdout.write(JSON.stringify(report, null, 2) + "\n");
   } else {
     process.stdout.write(formatDoctorReport(report) + "\n");

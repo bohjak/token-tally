@@ -12,9 +12,10 @@
 
 const { describe, test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
+const { mkdirSync, writeFileSync } = require("node:fs");
 const { join } = require("node:path");
 const Database = require("better-sqlite3");
-const { repairDoctorFindings, runDoctor, runMigrations } = require("../dist/src/index");
+const { compareSessionLogs, repairDoctorFindings, repairPiCanonicalIds, runDoctor, runMigrations } = require("../dist/src/index");
 const { makeTempDir } = require("./helpers");
 
 /**
@@ -271,6 +272,228 @@ describe("doctor diagnostics", () => {
       1,
     );
     assert.deepEqual(rows, [{ harness_message_id: "msg_real_provider_id" }]);
+  });
+
+  test("Pi session compare reports DB versus log drift for bounded window", () => {
+    const dbPath = join(tmp.dir, "doctor-pi-compare.db");
+    const sessionsRoot = join(tmp.dir, "pi-sessions");
+    const slugDir = join(sessionsRoot, "--tmp-project--");
+    const sessionFile = join(slugDir, "2026-06-12T00-00-00-000Z_session-a.jsonl");
+    mkdirSync(slugDir, { recursive: true });
+
+    writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({ type: "session", id: "pi-session-a", timestamp: "2026-06-12T00:00:00.000Z", cwd: "/tmp/project" }),
+        JSON.stringify({ type: "message", id: "u1", timestamp: "2026-06-12T00:00:01.000Z", message: { role: "user" } }),
+        JSON.stringify({
+          type: "message",
+          id: "a1",
+          timestamp: "2026-06-12T00:00:02.000Z",
+          message: {
+            role: "assistant",
+            provider: "anthropic",
+            model: "claude",
+            responseId: "msg_in_both",
+            timestamp: Date.parse("2026-06-12T00:00:02.000Z"),
+            usage: { input: 10, output: 20, cacheRead: 30, cacheWrite: 40, cost: { input: 0.0001, output: 0.0002, cacheRead: 0.0003, cacheWrite: 0.0004, total: 0.001 } },
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "a2",
+          timestamp: "2026-06-12T00:00:03.000Z",
+          message: {
+            role: "assistant",
+            provider: "anthropic",
+            model: "claude",
+            responseId: "msg_missing_in_db",
+            timestamp: Date.parse("2026-06-12T00:00:03.000Z"),
+            usage: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: { input: 0.00001, output: 0.00002, cacheRead: 0.00003, cacheWrite: 0.00004, total: 0.0001 } },
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    const db = new Database(dbPath);
+    db.pragma("foreign_keys = ON");
+    runMigrations(db);
+    db.exec(`
+      INSERT INTO harnesses
+        (name, display_name, version, integration_version, first_seen_at, last_seen_at)
+      VALUES
+        ('pi', 'Pi', '1.0.0', '0.1.0', 1000, 1000);
+
+      INSERT INTO sessions
+        (id, harness_id, harness_session_id, session_file, cwd, started_at, ended_at)
+      VALUES
+        ('session-a', 'pi', '${sessionFile}', '${sessionFile}', '/tmp/project', 1000, 5000);
+
+      INSERT INTO turns
+        (id, session_id, harness_id, harness_turn_id, turn_index, started_at, ended_at)
+      VALUES
+        ('turn-a', 'session-a', 'pi', 'turn-a', 0, 2000, 3000);
+
+      INSERT INTO llm_messages
+        (id, session_id, turn_id, harness_id, harness_message_id, ts,
+         provider, model_id, input_tokens, output_tokens,
+         cache_read_tokens, cache_write_tokens,
+         cost_input_micros, cost_output_micros, cost_cache_read_micros,
+         cost_cache_write_micros, cost_total_micros, cost_source)
+      VALUES
+        ('message-both', 'session-a', 'turn-a', 'pi', 'msg_in_both', 1781222402000,
+         'anthropic', 'claude', 10, 20, 30, 40,
+         100, 200, 300, 400, 1000, 'harness'),
+        ('message-extra', 'session-a', 'turn-a', 'pi', 'msg_extra_in_db', 1781222404000,
+         'anthropic', 'claude', 5, 6, 7, 8,
+         50, 60, 70, 80, 260, 'harness');
+    `);
+    db.close();
+
+    const report = compareSessionLogs({
+      dbPath,
+      piSessionsPath: sessionsRoot,
+      harnesses: ["pi"],
+      from: "2026-06-12",
+      to: "2026-06-13",
+    });
+    const piReport = report.reports[0];
+
+    assert.equal(report.status, "warning");
+    assert.equal(report.harnessesCompared[0], "pi");
+    assert.equal(piReport?.db.messages, 2);
+    assert.equal(piReport?.logs.messages, 2);
+    assert.equal(piReport?.missingInDb.count, 1);
+    assert.equal(piReport?.missingInDb.sample[0]?.harnessMessageId, "msg_missing_in_db");
+    assert.equal(piReport?.extraInDb.count, 1);
+    assert.equal(piReport?.extraInDb.sample[0]?.harnessMessageId, "msg_extra_in_db");
+  });
+
+  test("canonical-ID repair matches synthesized DB rows to provider-ID log rows", () => {
+    const dbPath = join(tmp.dir, "doctor-pi-canonical-repair.db");
+    const sessionsRoot = join(tmp.dir, "pi-canonical-sessions");
+    const slugDir = join(sessionsRoot, "--tmp-project--");
+    const sessionFile = join(slugDir, "2026-06-12T00-00-00-000Z_session-a.jsonl");
+    mkdirSync(slugDir, { recursive: true });
+
+    writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({ type: "session", id: "pi-session-a", timestamp: "2026-06-12T00:00:00.000Z", cwd: "/tmp/project" }),
+        JSON.stringify({ type: "message", id: "u1", timestamp: "2026-06-12T00:00:01.000Z", message: { role: "user" } }),
+        JSON.stringify({
+          type: "message",
+          id: "a1",
+          timestamp: "2026-06-12T00:00:02.000Z",
+          message: {
+            role: "assistant",
+            provider: "anthropic",
+            model: "claude",
+            responseId: "msg_canonical_target",
+            timestamp: Date.parse("2026-06-12T00:00:02.000Z"),
+            usage: { input: 10, output: 20, cacheRead: 30, cacheWrite: 40, cost: { input: 0.0001, output: 0.0002, cacheRead: 0.0003, cacheWrite: 0.0004, total: 0.001 } },
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    const db = new Database(dbPath);
+    db.pragma("foreign_keys = ON");
+    runMigrations(db);
+    // Live-writer row for the same call: synthesized ID, ts +7s like the
+    // message_end hook stamp, identical payload.
+    db.exec(`
+      INSERT INTO harnesses
+        (name, display_name, version, integration_version, first_seen_at, last_seen_at)
+      VALUES
+        ('pi', 'Pi', '1.0.0', '0.1.0', 1000, 1000);
+
+      INSERT INTO sessions
+        (id, harness_id, harness_session_id, session_file, cwd, started_at, ended_at)
+      VALUES
+        ('session-a', 'pi', '${sessionFile}', '${sessionFile}', '/tmp/project', 1000, 5000);
+
+      INSERT INTO turns
+        (id, session_id, harness_id, harness_turn_id, turn_index, started_at, ended_at)
+      VALUES
+        ('turn-a', 'session-a', 'pi', 'turn-a', 0, 2000, 3000);
+
+      INSERT INTO llm_messages
+        (id, session_id, turn_id, harness_id, harness_message_id, ts,
+         provider, model_id, input_tokens, output_tokens,
+         cache_read_tokens, cache_write_tokens,
+         cost_input_micros, cost_output_micros, cost_cache_read_micros,
+         cost_cache_write_micros, cost_total_micros, cost_source)
+      VALUES
+        ('message-synth', 'session-a', 'turn-a', 'pi', '${sessionFile}:t0:m0', ${Date.parse("2026-06-12T00:00:09.000Z")},
+         'anthropic', 'claude', 10, 20, 30, 40,
+         100, 200, 300, 400, 1000, 'harness');
+    `);
+    db.close();
+
+    // Dry-run: reports the match but does not modify the DB.
+    const dryRun = repairPiCanonicalIds({
+      dbPath,
+      sessionsPath: sessionsRoot,
+      from: "2026-06-12",
+      to: "2026-06-13",
+    });
+
+    assert.equal(dryRun.status, "ok");
+    assert.equal(dryRun.applied, false);
+    assert.equal(dryRun.matched, 1);
+    assert.equal(dryRun.updated, 0);
+    assert.equal(dryRun.sample[0]?.fromHarnessMessageId, `${sessionFile}:t0:m0`);
+    assert.equal(dryRun.sample[0]?.toHarnessMessageId, "msg_canonical_target");
+    assert.equal(dryRun.sample[0]?.tsOffsetMs, 7000);
+
+    const dbAfterDry = new Database(dbPath, { readonly: true });
+    const dryRow = /** @type {{ harness_message_id: string }} */ (
+      dbAfterDry.prepare("SELECT harness_message_id FROM llm_messages WHERE id = 'message-synth'").get()
+    );
+    dbAfterDry.close();
+    assert.equal(dryRow.harness_message_id, `${sessionFile}:t0:m0`, "dry-run must not modify rows");
+
+    // Apply: updates the synthesized ID in place.
+    const applied = repairPiCanonicalIds({
+      dbPath,
+      sessionsPath: sessionsRoot,
+      from: "2026-06-12",
+      to: "2026-06-13",
+      apply: true,
+    });
+
+    assert.equal(applied.status, "ok");
+    assert.equal(applied.applied, true);
+    assert.equal(applied.matched, 1);
+    assert.equal(applied.updated, 1);
+    assert.equal(applied.conflicts, 0);
+
+    const verifyDb = new Database(dbPath, { readonly: true });
+    const row = /** @type {{ harness_message_id: string, session_id: string }} */ (
+      verifyDb.prepare("SELECT harness_message_id, session_id FROM llm_messages WHERE id = 'message-synth'").get()
+    );
+    const count = /** @type {{ n: number }} */ (
+      verifyDb.prepare("SELECT COUNT(*) AS n FROM llm_messages").get()
+    );
+    verifyDb.close();
+
+    assert.equal(row.harness_message_id, "msg_canonical_target");
+    assert.equal(row.session_id, "session-a", "attribution preserved");
+    assert.equal(count.n, 1, "update in place — no new rows");
+
+    // Idempotent: a second run finds nothing left to repair.
+    const again = repairPiCanonicalIds({
+      dbPath,
+      sessionsPath: sessionsRoot,
+      from: "2026-06-12",
+      to: "2026-06-13",
+      apply: true,
+    });
+    assert.equal(again.matched, 0);
+    assert.equal(again.updated, 0);
   });
 
   test("repair apply removes duplicates and closes stale sessions", () => {

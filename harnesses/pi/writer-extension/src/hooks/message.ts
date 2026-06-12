@@ -15,8 +15,14 @@
  * pricing table via computeCostMicros(): cost_source becomes "writer" when
  * rates are found, or "unknown" when the model is not in the table.
  *
- * ## Message ID synthesis
- * Pi does not expose a stable per-message identifier. We synthesise:
+ * ## Message ID selection
+ * Pi's AssistantMessage carries the provider response ID (`responseId`,
+ * e.g. `msg_...` / `resp_...`) for successful responses. We use it as the
+ * canonical harness_message_id so live-writer rows and session-log import
+ * rows share the same identity (the importer also keys on responseId).
+ *
+ * When responseId is absent (aborted/error responses), we fall back to a
+ * synthesized ID:
  *   `${harnessSessionId}:t${turnIndex}:m${messageCounter}`
  * where messageCounter is a per-turn integer that resets on turn_start.
  * This is deterministic given the same sequence of events, satisfying the
@@ -61,6 +67,8 @@ type PiMessageEndEvent = {
     role: string;
     model?: string;
     provider?: string;
+    /** Provider response ID (e.g. msg_... / resp_...); absent on aborted/error responses. */
+    responseId?: string;
     usage?: PiUsage;
   };
 };
@@ -235,11 +243,16 @@ export function register(pi: PiAPIStub, writer: AnalyticsWriterLike): void {
         });
       }
 
-      // Synthesise a stable message ID: session + turn index + per-turn counter.
+      // Prefer the provider response ID — it is the canonical identity shared
+      // with the session-log importer. Fall back to a synthesized ID
+      // (session + turn index + per-turn counter) when responseId is absent.
       const harnessSessionId = state?.harnessSessionId ?? `unknown:${centralSessionId}`;
       const turnIndex = turnState?.turnIndex ?? 0;
       const msgCounter = turnState?.messageCounter ?? 0;
-      const harnessMessageId = `${harnessSessionId}:t${turnIndex}:m${msgCounter}`;
+      const harnessMessageId =
+        typeof msg.responseId === "string" && msg.responseId.length > 0
+          ? msg.responseId
+          : `${harnessSessionId}:t${turnIndex}:m${msgCounter}`;
 
       // Increment the per-turn message counter (stored on the TurnState reference).
       if (turnState != null) {
