@@ -86,16 +86,43 @@ EOF
   # using the modern API avoids deprecation warnings in system logs.
   # bootout is idempotent: it exits non-zero if the service was never loaded,
   # so we always suppress its exit code.
-  launchctl bootout "gui/$(id -u)/${plist_label}" 2>/dev/null || true
-  if launchctl bootstrap "gui/$(id -u)" "${plist_path}"; then
+  local launchd_domain
+  launchd_domain="gui/$(id -u)"
+  local service_target="${launchd_domain}/${plist_label}"
+
+  launchctl bootout "${service_target}" 2>/dev/null || true
+
+  # launchctl bootout can return before launchd has fully removed the service.
+  # Bootstrapping immediately in that window can fail with a misleading
+  # "Bootstrap failed: 5: Input/output error" even though retrying moments later
+  # succeeds. Wait briefly for the service target to disappear before loading
+  # the freshly written plist.
+  local _
+  for _ in {1..20}; do
+    if ! launchctl print "${service_target}" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.1
+  done
+
+  if launchctl bootstrap "${launchd_domain}" "${plist_path}"; then
     info "Daemon registered with launchd (starts at login, restarts on crash)"
     info "Logs: ${log_path}"
     return 0
-  else
-    err "launchctl bootstrap failed — daemon plist written but not loaded"
-    warn "Start manually with: token-tally daemon"
-    return 1
   fi
+
+  # A failed bootstrap may still have registered the service. Treat that as a
+  # degraded success so reinstall remains idempotent and users are not told to
+  # start a daemon that launchd is already managing.
+  if launchctl print "${service_target}" >/dev/null 2>&1; then
+    warn "launchctl bootstrap reported an error, but the daemon is loaded"
+    info "Logs: ${log_path}"
+    return 0
+  fi
+
+  err "launchctl bootstrap failed — daemon plist written but not loaded"
+  warn "Start manually with: token-tally daemon"
+  return 1
 }
 
 # ---------------------------------------------------------------------------
