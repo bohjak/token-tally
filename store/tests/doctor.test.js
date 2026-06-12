@@ -44,10 +44,10 @@ function seedDuplicateParents(dbPath) {
       ('pi', 'Pi', '1.0.0', '0.1.0', 1000, 1000);
 
     INSERT INTO sessions
-      (id, harness_id, harness_session_id, cwd, started_at, ended_at)
+      (id, harness_id, harness_session_id, session_file, cwd, started_at, ended_at)
     VALUES
-      ('session-a', 'pi', 'session-a', '/tmp/project', 1000, 5000),
-      ('session-b', 'pi', 'session-b', '/tmp/project', 1000, 5000);
+      ('session-a', 'pi', 'session-a', '/tmp/session-a.jsonl', '/tmp/project', 1000, 5000),
+      ('session-b', 'pi', 'session-b', '/tmp/session-b.jsonl', '/tmp/project', 1000, 5000);
 
     INSERT INTO turns
       (id, session_id, harness_id, harness_turn_id, turn_index, started_at, ended_at)
@@ -117,6 +117,67 @@ describe("doctor diagnostics", () => {
     assert.equal(finding?.detail?.groupCount, 1);
   });
 
+  test("doctor flags Pi replay duplicate LLM message rows with synthesized IDs", () => {
+    const dbPath = join(tmp.dir, "doctor-pi-replay-dupes.db");
+    seedDuplicateParents(dbPath);
+
+    const db = new Database(dbPath);
+    db.pragma("foreign_keys = ON");
+    db.exec(`
+      INSERT INTO llm_messages
+        (id, session_id, turn_id, harness_id, harness_message_id, ts,
+         provider, model_id, input_tokens, output_tokens,
+         cache_read_tokens, cache_write_tokens,
+         cost_input_micros, cost_output_micros, cost_cache_read_micros,
+         cost_cache_write_micros, cost_total_micros, cost_source)
+      VALUES
+        ('message-real', 'session-a', 'turn-a', 'pi', 'msg_real_provider_id', 4000,
+         'anthropic', 'claude', 10, 20, 30, 40,
+         100, 200, 300, 400, 1000, 'harness'),
+        ('message-replay', 'session-a', 'turn-a', 'pi', '/tmp/session-a.jsonl:t0:m0', 4500,
+         'anthropic', 'claude', 10, 20, 30, 40,
+         100, 200, 300, 400, 1000, 'harness');
+    `);
+    db.close();
+
+    const report = runDoctor(dbPath);
+    const finding = findFinding(report, "duplicate_pi_replay_llm_messages");
+
+    assert.equal(report.status, "ok", "duplicate warnings should not make doctor fail");
+    assert.equal(findFinding(report, "duplicate_llm_messages_ok")?.severity, "ok");
+    assert.equal(finding?.severity, "warning");
+    assert.equal(finding?.detail?.duplicateCount, 1);
+    assert.equal(finding?.detail?.groupCount, 1);
+  });
+
+  test("doctor does not flag repeated real provider rows as Pi replay duplicates", () => {
+    const dbPath = join(tmp.dir, "doctor-pi-replay-legit-repeat.db");
+    seedDuplicateParents(dbPath);
+
+    const db = new Database(dbPath);
+    db.pragma("foreign_keys = ON");
+    db.exec(`
+      INSERT INTO llm_messages
+        (id, session_id, turn_id, harness_id, harness_message_id, ts,
+         provider, model_id, input_tokens, output_tokens,
+         cache_read_tokens, cache_write_tokens,
+         cost_input_micros, cost_output_micros, cost_cache_read_micros,
+         cost_cache_write_micros, cost_total_micros, cost_source)
+      VALUES
+        ('message-real-a', 'session-a', 'turn-a', 'pi', 'msg_real_a', 4000,
+         'anthropic', 'claude', 10, 20, 30, 40,
+         100, 200, 300, 400, 1000, 'harness'),
+        ('message-real-b', 'session-a', 'turn-a', 'pi', 'msg_real_b', 4500,
+         'anthropic', 'claude', 10, 20, 30, 40,
+         100, 200, 300, 400, 1000, 'harness');
+    `);
+    db.close();
+
+    const report = runDoctor(dbPath);
+
+    assert.equal(findFinding(report, "duplicate_pi_replay_llm_messages_ok")?.severity, "ok");
+  });
+
   test("doctor flags likely duplicate tool-call rows", () => {
     const dbPath = join(tmp.dir, "doctor-tool-dupes.db");
     seedDuplicateParents(dbPath);
@@ -172,6 +233,44 @@ describe("doctor diagnostics", () => {
       1,
     );
     assert.equal(row.n, 2, "dry-run must not delete rows");
+  });
+
+  test("repair apply removes Pi replay duplicates and keeps provider ID rows", () => {
+    const dbPath = join(tmp.dir, "doctor-repair-pi-replay.db");
+    seedDuplicateParents(dbPath);
+
+    const db = new Database(dbPath);
+    db.pragma("foreign_keys = ON");
+    db.exec(`
+      INSERT INTO llm_messages
+        (id, session_id, turn_id, harness_id, harness_message_id, ts,
+         provider, model_id, input_tokens, output_tokens,
+         cache_read_tokens, cache_write_tokens,
+         cost_input_micros, cost_output_micros, cost_cache_read_micros,
+         cost_cache_write_micros, cost_total_micros, cost_source)
+      VALUES
+        ('message-real', 'session-a', 'turn-a', 'pi', 'msg_real_provider_id', 4000,
+         'anthropic', 'claude', 10, 20, 30, 40,
+         100, 200, 300, 400, 1000, 'harness'),
+        ('message-replay', 'session-a', 'turn-a', 'pi', '/tmp/session-a.jsonl:t0:m0', 4500,
+         'anthropic', 'claude', 10, 20, 30, 40,
+         100, 200, 300, 400, 1000, 'harness');
+    `);
+    db.close();
+
+    const repair = repairDoctorFindings(dbPath, true);
+    const verifyDb = new Database(dbPath);
+    const rows = verifyDb
+      .prepare("SELECT harness_message_id FROM llm_messages ORDER BY harness_message_id")
+      .all();
+    verifyDb.close();
+
+    assert.equal(repair.status, "ok");
+    assert.equal(
+      repair.actions.find((a) => a.code === "repair_duplicate_pi_replay_llm_messages")?.affectedRows,
+      1,
+    );
+    assert.deepEqual(rows, [{ harness_message_id: "msg_real_provider_id" }]);
   });
 
   test("repair apply removes duplicates and closes stale sessions", () => {

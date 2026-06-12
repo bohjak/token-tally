@@ -206,11 +206,13 @@ export function repairDoctorFindings(dbPath: string, apply: boolean): DoctorRepa
     if (apply) {
       db.transaction(() => {
         actions.push(repairDuplicateLlmMessages(db, true));
+        actions.push(repairDuplicatePiReplayLlmMessages(db, true));
         actions.push(repairDuplicateToolCalls(db, true));
         actions.push(repairStaleSessions(db, generatedAt, true));
       })();
     } else {
       actions.push(repairDuplicateLlmMessages(db, false));
+      actions.push(repairDuplicatePiReplayLlmMessages(db, false));
       actions.push(repairDuplicateToolCalls(db, false));
       actions.push(repairStaleSessions(db, generatedAt, false));
     }
@@ -396,6 +398,7 @@ function tableExists(db: Database.Database, table: string): boolean {
 function checkDuplicateRecords(db: Database.Database): Finding[] {
   return [
     checkDuplicateLlmMessages(db),
+    checkDuplicatePiReplayLlmMessages(db),
     checkDuplicateToolCalls(db),
   ];
 }
@@ -487,6 +490,155 @@ function checkDuplicateLlmMessages(db: Database.Database): Finding {
     detail: {
       groupCount: countRow.group_count,
       duplicateCount: countRow.duplicate_count,
+      sample,
+    },
+  };
+}
+
+// Pi session-log imports can replay a live-writer row with a synthesized
+// `<session_file>:tN:mM` message id. The replay often has the same usage and
+// cost payload as the live row, but a slightly different timestamp, so the
+// stricter semantic duplicate check above intentionally does not catch it.
+const PI_REPLAY_DUPLICATE_WINDOW_MS = 10 * 60 * 1000;
+
+const PI_REPLAY_GROUP_FIELDS = `
+  m.session_id,
+  COALESCE(m.provider, ''),
+  COALESCE(m.model_id, ''),
+  m.input_tokens,
+  m.output_tokens,
+  m.cache_read_tokens,
+  m.cache_write_tokens,
+  m.cost_input_micros,
+  m.cost_output_micros,
+  m.cost_cache_read_micros,
+  m.cost_cache_write_micros,
+  m.cost_total_micros,
+  m.cost_currency,
+  m.cost_source
+`;
+
+const PI_REPLAY_GROUP_JOIN = `
+  g.session_id = m.session_id
+  AND g.provider = COALESCE(m.provider, '')
+  AND g.model_id = COALESCE(m.model_id, '')
+  AND g.input_tokens = m.input_tokens
+  AND g.output_tokens = m.output_tokens
+  AND g.cache_read_tokens = m.cache_read_tokens
+  AND g.cache_write_tokens = m.cache_write_tokens
+  AND g.cost_input_micros = m.cost_input_micros
+  AND g.cost_output_micros = m.cost_output_micros
+  AND g.cost_cache_read_micros = m.cost_cache_read_micros
+  AND g.cost_cache_write_micros = m.cost_cache_write_micros
+  AND g.cost_total_micros = m.cost_total_micros
+  AND g.cost_currency = m.cost_currency
+  AND g.cost_source = m.cost_source
+`;
+
+const PI_REPLAY_DUPLICATE_ROWIDS_SQL = `
+  WITH replay_groups AS (
+    SELECT
+      m.session_id,
+      COALESCE(m.provider, '') AS provider,
+      COALESCE(m.model_id, '') AS model_id,
+      m.input_tokens,
+      m.output_tokens,
+      m.cache_read_tokens,
+      m.cache_write_tokens,
+      m.cost_input_micros,
+      m.cost_output_micros,
+      m.cost_cache_read_micros,
+      m.cost_cache_write_micros,
+      m.cost_total_micros,
+      m.cost_currency,
+      m.cost_source
+    FROM llm_messages m
+    JOIN sessions s ON s.id = m.session_id
+    WHERE m.harness_id = 'pi'
+    GROUP BY ${PI_REPLAY_GROUP_FIELDS}
+    HAVING
+      COUNT(*) > 1
+      AND MAX(m.ts) - MIN(m.ts) <= ${PI_REPLAY_DUPLICATE_WINDOW_MS}
+      AND SUM(CASE WHEN m.harness_message_id GLOB s.session_file || ':t[0-9]*:m[0-9]*' THEN 1 ELSE 0 END) > 0
+      AND SUM(CASE WHEN m.harness_message_id GLOB s.session_file || ':t[0-9]*:m[0-9]*' THEN 0 ELSE 1 END) > 0
+  )
+  SELECT m.rowid
+  FROM llm_messages m
+  JOIN sessions s ON s.id = m.session_id
+  JOIN replay_groups g ON ${PI_REPLAY_GROUP_JOIN}
+  WHERE m.harness_id = 'pi'
+    AND m.harness_message_id GLOB s.session_file || ':t[0-9]*:m[0-9]*'
+`;
+
+function checkDuplicatePiReplayLlmMessages(db: Database.Database): Finding {
+  if (!tableExists(db, "llm_messages") || !tableExists(db, "sessions")) {
+    return {
+      code: "duplicate_pi_replay_llm_messages_skipped",
+      severity: "warning",
+      message: "Pi replay duplicate check skipped because required tables are missing.",
+    };
+  }
+
+  const countRow = db
+    .prepare(
+      `WITH duplicate_rows AS (${PI_REPLAY_DUPLICATE_ROWIDS_SQL}),
+            duplicate_groups AS (
+         SELECT 1
+         FROM llm_messages m
+         JOIN sessions s ON s.id = m.session_id
+         WHERE m.rowid IN (SELECT rowid FROM duplicate_rows)
+         GROUP BY ${PI_REPLAY_GROUP_FIELDS}
+       )
+       SELECT COUNT(*) AS group_count
+       FROM duplicate_groups`
+    )
+    .get() as { group_count: number };
+
+  const duplicateCount = db
+    .prepare(`SELECT COUNT(*) AS n FROM (${PI_REPLAY_DUPLICATE_ROWIDS_SQL})`)
+    .get() as { n: number };
+
+  if (duplicateCount.n === 0) {
+    return {
+      code: "duplicate_pi_replay_llm_messages_ok",
+      severity: "ok",
+      message: "No Pi replay duplicate LLM message rows detected.",
+    };
+  }
+
+  const sample = db
+    .prepare(
+      `WITH duplicate_rows AS (${PI_REPLAY_DUPLICATE_ROWIDS_SQL})
+       SELECT
+         s.session_file,
+         COALESCE(m.provider, '') AS provider,
+         COALESCE(m.model_id, '') AS model_id,
+         m.input_tokens,
+         m.output_tokens,
+         m.cache_read_tokens,
+         m.cache_write_tokens,
+         m.cost_total_micros,
+         COUNT(*) AS duplicate_row_count,
+         GROUP_CONCAT(m.id) AS duplicate_ids
+       FROM llm_messages m
+       JOIN sessions s ON s.id = m.session_id
+       WHERE m.rowid IN (SELECT rowid FROM duplicate_rows)
+       GROUP BY ${PI_REPLAY_GROUP_FIELDS}
+       ORDER BY MAX(m.ts) DESC
+       LIMIT ${DUPLICATE_SAMPLE_SIZE}`
+    )
+    .all() as Array<Record<string, unknown>>;
+
+  return {
+    code: "duplicate_pi_replay_llm_messages",
+    severity: "warning",
+    message:
+      `${duplicateCount.n} Pi replay duplicate LLM message row(s) detected. ` +
+      `These rows have synthesized session-log IDs but match live provider-ID rows ` +
+      `within the same session.`,
+    detail: {
+      groupCount: countRow.group_count,
+      duplicateCount: duplicateCount.n,
       sample,
     },
   };
@@ -761,6 +913,33 @@ function repairDuplicateLlmMessages(db: Database.Database, apply: boolean): Repa
   };
 }
 
+function repairDuplicatePiReplayLlmMessages(db: Database.Database, apply: boolean): RepairAction {
+  if (!tableExists(db, "llm_messages") || !tableExists(db, "sessions")) {
+    return {
+      code: "repair_duplicate_pi_replay_llm_messages_skipped",
+      affectedRows: 0,
+      message: "Skipped Pi replay duplicate LLM message repair because required tables are missing.",
+    };
+  }
+
+  const countRow = db
+    .prepare(`SELECT COUNT(*) AS n FROM (${PI_REPLAY_DUPLICATE_ROWIDS_SQL})`)
+    .get() as { n: number };
+
+  if (apply && countRow.n > 0) {
+    db.prepare(
+      `DELETE FROM llm_messages
+       WHERE rowid IN (${PI_REPLAY_DUPLICATE_ROWIDS_SQL})`
+    ).run();
+  }
+
+  return {
+    code: "repair_duplicate_pi_replay_llm_messages",
+    affectedRows: countRow.n,
+    message: `${apply ? "Deleted" : "Would delete"} ${countRow.n} Pi replay duplicate LLM message row(s).`,
+  };
+}
+
 function repairDuplicateToolCalls(db: Database.Database, apply: boolean): RepairAction {
   if (!tableExists(db, "tool_calls") || !tableExists(db, "sessions")) {
     return {
@@ -902,6 +1081,7 @@ export function formatDoctorReport(report: DoctorReport): string {
 
   const hasRepairableFindings = report.findings.some((f) =>
     f.code === "duplicate_llm_messages" ||
+    f.code === "duplicate_pi_replay_llm_messages" ||
     f.code === "duplicate_tool_calls" ||
     f.code === "stale_sessions"
   );
