@@ -75,16 +75,29 @@ main() {
 
   # ---- Verify `token-tally explore --help` works ----
   # Use the store binary path directly so this works before any PATH refresh.
+  # On a fresh checkout, store/bin/token-tally.js requires store/dist/cli/index.js;
+  # build the store package here if that output is not present yet.
   local store_bin="${repo_root}/store/bin/token-tally.js"
+  local store_cli_dist="${repo_root}/store/dist/cli/index.js"
   if [[ ! -f "${store_bin}" ]]; then
     warn "store/bin/token-tally.js not found — skipping explore --help check."
     warn "  Run the store install step first, then re-run this script."
   else
+    if [[ ! -f "${store_cli_dist}" ]]; then
+      echo "  Building @token-tally/store CLI for explore verification…"
+      pnpm --filter @token-tally/store --dir "${repo_root}" build 2>&1 | sed 's/^/    /' || {
+        err "@token-tally/store build failed"
+        return 1
+      }
+    fi
+
     echo "  Verifying token-tally explore --help…"
-    if node "${store_bin}" explore --help >/dev/null 2>&1; then
+    local help_output
+    if help_output="$(node "${store_bin}" explore --help 2>&1)"; then
       info "token-tally explore --help works"
     else
       err "token-tally explore --help failed"
+      printf '%s\n' "${help_output}" | sed 's/^/    /' >&2
       err "  Ensure the store CLI is built and supports the 'explore' subcommand (T1)."
       return 1
     fi

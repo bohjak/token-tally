@@ -8,8 +8,11 @@
     "token-tally-claude-hook": "./dist/bin/token-tally-claude-hook.js"
   },
   "scripts": {
+    "prebuild": "pnpm -F @token-tally/harness-kit build",
     "build": "tsc && chmod +x dist/bin/token-tally-claude-hook.js",
+    "pretypecheck": "pnpm -F @token-tally/harness-kit build",
     "typecheck": "tsc --noEmit",
+    "pretest": "pnpm build",
     "test": "node --test 'dist/tests/**/*.test.js'"
   },
   "dependencies": {

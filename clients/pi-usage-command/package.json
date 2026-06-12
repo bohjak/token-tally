@@ -16,6 +16,7 @@
     ]
   },
   "scripts": {
+    "pretypecheck": "pnpm -F @token-tally/queries build",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test 'src/tests/**/*.test.ts'"
   },

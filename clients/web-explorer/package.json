@@ -10,8 +10,10 @@
     "dev:server": "tsx watch server/index.ts --port 3741 --no-open",
     "dev:client": "vite",
     "build": "pnpm build:server && pnpm build:client",
+    "prebuild:server": "pnpm -F @token-tally/queries build",
     "build:server": "tsc -p tsconfig.json",
     "build:client": "vite build",
+    "pretypecheck": "pnpm -F @token-tally/queries build",
     "start": "node dist/server/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.client.json",
     "test": "node --test 'dist/server/tests/**/*.test.js'"

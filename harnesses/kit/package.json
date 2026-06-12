@@ -7,8 +7,11 @@
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",
   "scripts": {
+    "prebuild": "pnpm -F @token-tally/store build",
     "build": "tsc",
+    "pretypecheck": "pnpm -F @token-tally/store build",
     "typecheck": "tsc --noEmit",
+    "pretest": "pnpm build",
     "test": "node --test 'dist/tests/**/*.test.js'"
   },
   "engines": {

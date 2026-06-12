@@ -14,7 +14,9 @@
     "extensions": ["./src/index.ts"]
   },
   "scripts": {
+    "pretypecheck": "pnpm -F @token-tally/store build",
     "typecheck": "tsc --noEmit",
+    "pretest": "pnpm -F @token-tally/store build",
     "test": "node --import tsx --test 'tests/**/*.test.ts'"
   },
   "dependencies": {
