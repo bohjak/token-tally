@@ -1,7 +1,7 @@
 {
   "name": "@token-tally/pi-usage-command",
   "version": "0.1.0",
-  "description": "Pi usage command client — /usage and /analytics doctor reading from the ToTally central store",
+  "description": "Pi usage command client \u2014 /usage and /analytics doctor reading from the ToTally central store",
   "type": "module",
   "private": true,
   "license": "MIT",
@@ -11,10 +11,13 @@
     "directory": "clients/pi-usage-command"
   },
   "pi": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test 'src/tests/**/*.test.ts'"
   },
   "engines": {
     "node": ">=24.0.0"

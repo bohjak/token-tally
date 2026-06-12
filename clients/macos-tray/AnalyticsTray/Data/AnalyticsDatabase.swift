@@ -60,12 +60,33 @@ final class AnalyticsDatabase {
         // DELETE, or DDL on this connection is rejected by SQLite itself.
         // This is the primary safety boundary; SQLITE_OPEN_READWRITE is purely
         // for WAL sidecar compatibility.
-        sqlite3_exec(handle, "PRAGMA query_only = 1;", nil, nil, nil)
+        //
+        // Check the return code: if query_only fails, the connection would
+        // remain writable -- treat that as a hard open failure.
+        let qoRc = sqlite3_exec(handle, "PRAGMA query_only = 1;", nil, nil, nil)
+        guard qoRc == SQLITE_OK else {
+            let message = String(cString: sqlite3_errmsg(handle))
+            sqlite3_close(handle)
+            throw SQLiteError.openFailed(
+                path: self.path,
+                code: qoRc,
+                message: "PRAGMA query_only = 1 failed: \(message)"
+            )
+        }
 
         // Per the plan: every connection (reader or writer) must enable FK enforcement.
         // In query_only mode this is a no-op for writes, but enforces FKs on any
         // implicit reads triggered by query plans.
-        sqlite3_exec(handle, "PRAGMA foreign_keys = ON;", nil, nil, nil)
+        let fkRc = sqlite3_exec(handle, "PRAGMA foreign_keys = ON;", nil, nil, nil)
+        guard fkRc == SQLITE_OK else {
+            let message = String(cString: sqlite3_errmsg(handle))
+            sqlite3_close(handle)
+            throw SQLiteError.openFailed(
+                path: self.path,
+                code: fkRc,
+                message: "PRAGMA foreign_keys = ON failed: \(message)"
+            )
+        }
 
         // Short busy timeout: readers in WAL mode rarely contend with writers,
         // but a checkpoint or exclusive lock can still block briefly.

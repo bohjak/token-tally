@@ -131,13 +131,13 @@ function queryCostBucket(db: Database.Database, fromMs: number): CostBucket {
   const row = db
     .prepare(
       `SELECT
-         COALESCE(SUM(cost_total_micros), 0) / 1000000.0 AS cost_usd,
+         COALESCE(SUM(CASE WHEN cost_source != 'unknown' THEN cost_total_micros ELSE 0 END), 0) / 1000000.0 AS cost_usd,
          COALESCE(SUM(input_tokens + output_tokens), 0)  AS billable_tokens,
          COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens), 0) AS tokens,
          COALESCE(SUM(cache_read_tokens + cache_write_tokens), 0) AS cached_tokens,
-         COALESCE(SUM(cost_cache_read_micros + cost_cache_write_micros), 0) / 1000000.0 AS cached_cost_usd,
+         COALESCE(SUM(CASE WHEN cost_source != 'unknown' THEN cost_cache_read_micros + cost_cache_write_micros ELSE 0 END), 0) / 1000000.0 AS cached_cost_usd,
          COALESCE(SUM(
-           CASE WHEN input_tokens > 0
+           CASE WHEN cost_source != 'unknown' AND input_tokens > 0
              THEN (cache_read_tokens + cache_write_tokens) * (cost_input_micros * 1.0 / input_tokens)
                   - (cost_cache_read_micros + cost_cache_write_micros)
              ELSE 0
@@ -146,7 +146,7 @@ function queryCostBucket(db: Database.Database, fromMs: number): CostBucket {
          COUNT(DISTINCT turn_id)    AS turns,
          COUNT(DISTINCT session_id) AS sessions
        FROM llm_messages
-       WHERE ts >= ? AND cost_source != 'unknown'`
+       WHERE ts >= ?`
     )
     .get(fromMs) as BucketRow | undefined;
 
@@ -174,13 +174,13 @@ function queryCostBucketForSession(db: Database.Database, sessionId: string): Co
   const row = db
     .prepare(
       `SELECT
-         COALESCE(SUM(cost_total_micros), 0) / 1000000.0 AS cost_usd,
+         COALESCE(SUM(CASE WHEN cost_source != 'unknown' THEN cost_total_micros ELSE 0 END), 0) / 1000000.0 AS cost_usd,
          COALESCE(SUM(input_tokens + output_tokens), 0)  AS billable_tokens,
          COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens), 0) AS tokens,
          COALESCE(SUM(cache_read_tokens + cache_write_tokens), 0) AS cached_tokens,
-         COALESCE(SUM(cost_cache_read_micros + cost_cache_write_micros), 0) / 1000000.0 AS cached_cost_usd,
+         COALESCE(SUM(CASE WHEN cost_source != 'unknown' THEN cost_cache_read_micros + cost_cache_write_micros ELSE 0 END), 0) / 1000000.0 AS cached_cost_usd,
          COALESCE(SUM(
-           CASE WHEN input_tokens > 0
+           CASE WHEN cost_source != 'unknown' AND input_tokens > 0
              THEN (cache_read_tokens + cache_write_tokens) * (cost_input_micros * 1.0 / input_tokens)
                   - (cost_cache_read_micros + cost_cache_write_micros)
              ELSE 0
@@ -189,7 +189,7 @@ function queryCostBucketForSession(db: Database.Database, sessionId: string): Co
          COUNT(DISTINCT turn_id)    AS turns,
          COUNT(DISTINCT session_id) AS sessions
        FROM llm_messages
-       WHERE session_id = ? AND cost_source != 'unknown'`
+       WHERE session_id = ?`
     )
     .get(sessionId) as BucketRow | undefined;
 
@@ -232,11 +232,11 @@ export function queryTabSummary(db: Database.Database, since?: UsageSince): unkn
     .prepare(
       `SELECT
          COALESCE(m.model_id, t.model_id, 'unattributed') AS model_id,
-         COALESCE(SUM(m.cost_total_micros), 0) / 1000000.0 AS cost_usd,
+         COALESCE(SUM(CASE WHEN m.cost_source != 'unknown' THEN m.cost_total_micros ELSE 0 END), 0) / 1000000.0 AS cost_usd,
          COUNT(DISTINCT t.id) AS turns
        FROM llm_messages m
        LEFT JOIN turns t ON t.id = m.turn_id
-       WHERE m.ts >= ? AND m.cost_source != 'unknown'
+       WHERE m.ts >= ?
        GROUP BY 1
        ORDER BY cost_usd DESC
        LIMIT 1`
@@ -268,13 +268,13 @@ export function queryTabModels(db: Database.Database, since?: UsageSince): unkno
     .prepare(
       `SELECT
          COALESCE(NULLIF(m.model_id, ''), NULLIF(t.model_id, ''), 'unattributed') AS model_id,
-         COALESCE(SUM(m.cost_total_micros), 0) / 1000000.0 AS cost_usd,
+         COALESCE(SUM(CASE WHEN m.cost_source != 'unknown' THEN m.cost_total_micros ELSE 0 END), 0) / 1000000.0 AS cost_usd,
          COALESCE(SUM(m.input_tokens + m.output_tokens), 0) AS billable_tokens,
          COALESCE(SUM(m.input_tokens + m.cache_read_tokens + m.cache_write_tokens), 0) AS tokens_in,
          COALESCE(SUM(m.cache_read_tokens), 0) AS cache_read_tokens,
          COALESCE(SUM(m.cache_write_tokens), 0) AS cache_write_tokens,
          COALESCE(SUM(m.cache_read_tokens + m.cache_write_tokens), 0) AS cached_tokens,
-         COALESCE(SUM(m.cost_cache_read_micros + m.cost_cache_write_micros), 0) / 1000000.0 AS cached_cost_usd,
+         COALESCE(SUM(CASE WHEN m.cost_source != 'unknown' THEN m.cost_cache_read_micros + m.cost_cache_write_micros ELSE 0 END), 0) / 1000000.0 AS cached_cost_usd,
          COALESCE(SUM(m.input_tokens + m.output_tokens
                     + m.cache_read_tokens + m.cache_write_tokens), 0) AS total_tokens,
          COALESCE(SUM(m.output_tokens), 0) AS output_tokens,
@@ -282,7 +282,7 @@ export function queryTabModels(db: Database.Database, since?: UsageSince): unkno
          m.harness_id
        FROM llm_messages m
        LEFT JOIN turns t ON t.id = m.turn_id
-       WHERE m.ts >= ? AND m.cost_source != 'unknown'
+       WHERE m.ts >= ?
        GROUP BY 1, m.harness_id
        ORDER BY cost_usd DESC
        LIMIT 20`
@@ -353,12 +353,12 @@ export function queryTabRepos(db: Database.Database, since?: UsageSince): unknow
            ELSE 'unknown'
          END AS repo,
          m.harness_id,
-         COALESCE(SUM(m.cost_total_micros), 0) / 1000000.0 AS cost_usd,
+         COALESCE(SUM(CASE WHEN m.cost_source != 'unknown' THEN m.cost_total_micros ELSE 0 END), 0) / 1000000.0 AS cost_usd,
          COALESCE(SUM(m.input_tokens + m.output_tokens), 0) AS billable_tokens,
          COUNT(DISTINCT m.session_id) AS sessions
        FROM llm_messages m
        LEFT JOIN sessions s ON s.id = m.session_id
-       WHERE m.ts >= ? AND m.cost_source != 'unknown'
+       WHERE m.ts >= ?
        GROUP BY repo, m.harness_id
        ORDER BY cost_usd DESC
        LIMIT 20`
@@ -502,14 +502,14 @@ export function queryTabDaily(db: Database.Database, since?: UsageSince): unknow
     .prepare(
       `SELECT
          date(ts / 1000, 'unixepoch', 'localtime') AS date,
-         COALESCE(SUM(cost_total_micros), 0) / 1000000.0 AS cost_usd,
+         COALESCE(SUM(CASE WHEN cost_source != 'unknown' THEN cost_total_micros ELSE 0 END), 0) / 1000000.0 AS cost_usd,
          COALESCE(SUM(input_tokens + output_tokens), 0) AS billable_tokens,
          COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens), 0) AS tokens,
          COALESCE(SUM(cache_read_tokens + cache_write_tokens), 0) AS cached_tokens,
-         COALESCE(SUM(cost_cache_read_micros + cost_cache_write_micros), 0) / 1000000.0 AS cached_cost_usd,
+         COALESCE(SUM(CASE WHEN cost_source != 'unknown' THEN cost_cache_read_micros + cost_cache_write_micros ELSE 0 END), 0) / 1000000.0 AS cached_cost_usd,
          COUNT(DISTINCT turn_id) AS turns
        FROM llm_messages
-       WHERE ts >= ? AND cost_source != 'unknown'
+       WHERE ts >= ?
        GROUP BY date
        ORDER BY date DESC
        LIMIT 90`

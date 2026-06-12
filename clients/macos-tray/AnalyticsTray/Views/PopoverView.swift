@@ -215,7 +215,22 @@ struct PopoverView: View {
                 TopReposView(repos: snapshot.topRepos)
             }
 
-            // 6. Footer actions.
+            // 6. Unpriced-messages caveat (reader expectation #4 from docs/schema.md).
+            // Shown when messages with cost_source='unknown' exist in the week window so
+            // users are not misled into interpreting a zero-cost entry as "free".
+            if snapshot.unpricedMessages > 0 {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.circle")
+                        .imageScale(.small)
+                    Text("\(snapshot.unpricedMessages) unpriced message\(snapshot.unpricedMessages == 1 ? "" : "s") excluded from cost totals")
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 2)
+            }
+
+            // 7. Footer actions.
             footerActions
 
         }

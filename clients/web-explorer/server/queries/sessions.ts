@@ -127,20 +127,20 @@ export function listSessions(db: Database.Database, opts: ListSessionsOpts): Lis
       `SELECT
          s.id, s.harness_id, s.cwd, s.repo_owner, s.repo_name, s.repo_remote,
          s.started_at, s.ended_at,
-         COALESCE((SELECT SUM(m.cost_total_micros) FROM llm_messages m
-                   WHERE m.session_id = s.id AND m.cost_source != 'unknown'), 0) / 1000000.0 AS cost_usd,
+         COALESCE((SELECT SUM(CASE WHEN m.cost_source != 'unknown' THEN m.cost_total_micros ELSE 0 END) FROM llm_messages m
+                   WHERE m.session_id = s.id), 0) / 1000000.0 AS cost_usd,
          COALESCE((SELECT SUM(m.input_tokens + m.output_tokens + m.cache_read_tokens + m.cache_write_tokens) FROM llm_messages m
-                   WHERE m.session_id = s.id AND m.cost_source != 'unknown'), 0) AS tokens,
+                   WHERE m.session_id = s.id), 0) AS tokens,
          COALESCE((SELECT SUM(m.input_tokens + m.output_tokens) FROM llm_messages m
-                   WHERE m.session_id = s.id AND m.cost_source != 'unknown'), 0) AS billable_tokens,
+                   WHERE m.session_id = s.id), 0) AS billable_tokens,
          COALESCE((SELECT SUM(m.output_tokens) FROM llm_messages m
-                   WHERE m.session_id = s.id AND m.cost_source != 'unknown'), 0) AS output_tokens,
+                   WHERE m.session_id = s.id), 0) AS output_tokens,
          COALESCE((SELECT SUM(m.cache_read_tokens + m.cache_write_tokens) FROM llm_messages m
-                   WHERE m.session_id = s.id AND m.cost_source != 'unknown'), 0) AS cached_tokens,
+                   WHERE m.session_id = s.id), 0) AS cached_tokens,
          COALESCE((SELECT SUM(m.cache_read_tokens) FROM llm_messages m
-                   WHERE m.session_id = s.id AND m.cost_source != 'unknown'), 0) AS cache_read_tokens,
+                   WHERE m.session_id = s.id), 0) AS cache_read_tokens,
          COALESCE((SELECT SUM(m.cache_write_tokens) FROM llm_messages m
-                   WHERE m.session_id = s.id AND m.cost_source != 'unknown'), 0) AS cache_write_tokens,
+                   WHERE m.session_id = s.id), 0) AS cache_write_tokens,
          (SELECT COUNT(*) FROM turns t WHERE t.session_id = s.id) AS turns,
          (SELECT COUNT(*) FROM tool_calls tc WHERE tc.session_id = s.id) AS tool_calls,
          (s.ended_at - s.started_at) AS duration_ms,
@@ -175,20 +175,20 @@ export function getSession(db: Database.Database, sessionId: string): GetSession
       `SELECT
          s.id, s.harness_id, s.cwd, s.repo_owner, s.repo_name, s.repo_remote,
          s.started_at, s.ended_at,
-         COALESCE((SELECT SUM(m.cost_total_micros) FROM llm_messages m
-                   WHERE m.session_id = s.id AND m.cost_source != 'unknown'), 0) / 1000000.0 AS cost_usd,
+         COALESCE((SELECT SUM(CASE WHEN m.cost_source != 'unknown' THEN m.cost_total_micros ELSE 0 END) FROM llm_messages m
+                   WHERE m.session_id = s.id), 0) / 1000000.0 AS cost_usd,
          COALESCE((SELECT SUM(m.input_tokens + m.output_tokens + m.cache_read_tokens + m.cache_write_tokens) FROM llm_messages m
-                   WHERE m.session_id = s.id AND m.cost_source != 'unknown'), 0) AS tokens,
+                   WHERE m.session_id = s.id), 0) AS tokens,
          COALESCE((SELECT SUM(m.input_tokens + m.output_tokens) FROM llm_messages m
-                   WHERE m.session_id = s.id AND m.cost_source != 'unknown'), 0) AS billable_tokens,
+                   WHERE m.session_id = s.id), 0) AS billable_tokens,
          COALESCE((SELECT SUM(m.output_tokens) FROM llm_messages m
-                   WHERE m.session_id = s.id AND m.cost_source != 'unknown'), 0) AS output_tokens,
+                   WHERE m.session_id = s.id), 0) AS output_tokens,
          COALESCE((SELECT SUM(m.cache_read_tokens + m.cache_write_tokens) FROM llm_messages m
-                   WHERE m.session_id = s.id AND m.cost_source != 'unknown'), 0) AS cached_tokens,
+                   WHERE m.session_id = s.id), 0) AS cached_tokens,
          COALESCE((SELECT SUM(m.cache_read_tokens) FROM llm_messages m
-                   WHERE m.session_id = s.id AND m.cost_source != 'unknown'), 0) AS cache_read_tokens,
+                   WHERE m.session_id = s.id), 0) AS cache_read_tokens,
          COALESCE((SELECT SUM(m.cache_write_tokens) FROM llm_messages m
-                   WHERE m.session_id = s.id AND m.cost_source != 'unknown'), 0) AS cache_write_tokens,
+                   WHERE m.session_id = s.id), 0) AS cache_write_tokens,
          (SELECT COUNT(*) FROM turns t WHERE t.session_id = s.id) AS turns,
          (SELECT COUNT(*) FROM tool_calls tc WHERE tc.session_id = s.id) AS tool_calls,
          (s.ended_at - s.started_at) AS duration_ms,
@@ -208,14 +208,14 @@ export function getSession(db: Database.Database, sessionId: string): GetSession
     .prepare(
       `SELECT
          t.id, t.turn_index, t.started_at, t.ended_at, t.model_id,
-         COALESCE((SELECT SUM(m.cost_total_micros) FROM llm_messages m
-                   WHERE m.turn_id = t.id AND m.cost_source != 'unknown'), 0) / 1000000.0 AS cost_usd,
+         COALESCE((SELECT SUM(CASE WHEN m.cost_source != 'unknown' THEN m.cost_total_micros ELSE 0 END) FROM llm_messages m
+                   WHERE m.turn_id = t.id), 0) / 1000000.0 AS cost_usd,
          COALESCE((SELECT SUM(m.input_tokens) FROM llm_messages m
-                   WHERE m.turn_id = t.id AND m.cost_source != 'unknown'), 0) AS input_tokens,
+                   WHERE m.turn_id = t.id), 0) AS input_tokens,
          COALESCE((SELECT SUM(m.output_tokens) FROM llm_messages m
-                   WHERE m.turn_id = t.id AND m.cost_source != 'unknown'), 0) AS output_tokens,
+                   WHERE m.turn_id = t.id), 0) AS output_tokens,
          COALESCE((SELECT SUM(m.cache_read_tokens + m.cache_write_tokens) FROM llm_messages m
-                   WHERE m.turn_id = t.id AND m.cost_source != 'unknown'), 0) AS cached_tokens,
+                   WHERE m.turn_id = t.id), 0) AS cached_tokens,
          (SELECT COUNT(*) FROM tool_calls tc WHERE tc.turn_id = t.id) AS tool_call_count,
          COALESCE((SELECT SUM(CASE WHEN tc.is_error != 0 THEN 1 ELSE 0 END) FROM tool_calls tc
                    WHERE tc.turn_id = t.id), 0) AS error_count,
@@ -249,14 +249,14 @@ export function getTurnDetail(db: Database.Database, turnId: string): GetTurnDet
     .prepare(
       `SELECT
          t.id, t.turn_index, t.started_at, t.ended_at, t.model_id,
-         COALESCE((SELECT SUM(m.cost_total_micros) FROM llm_messages m
-                   WHERE m.turn_id = t.id AND m.cost_source != 'unknown'), 0) / 1000000.0 AS cost_usd,
+         COALESCE((SELECT SUM(CASE WHEN m.cost_source != 'unknown' THEN m.cost_total_micros ELSE 0 END) FROM llm_messages m
+                   WHERE m.turn_id = t.id), 0) / 1000000.0 AS cost_usd,
          COALESCE((SELECT SUM(m.input_tokens) FROM llm_messages m
-                   WHERE m.turn_id = t.id AND m.cost_source != 'unknown'), 0) AS input_tokens,
+                   WHERE m.turn_id = t.id), 0) AS input_tokens,
          COALESCE((SELECT SUM(m.output_tokens) FROM llm_messages m
-                   WHERE m.turn_id = t.id AND m.cost_source != 'unknown'), 0) AS output_tokens,
+                   WHERE m.turn_id = t.id), 0) AS output_tokens,
          COALESCE((SELECT SUM(m.cache_read_tokens + m.cache_write_tokens) FROM llm_messages m
-                   WHERE m.turn_id = t.id AND m.cost_source != 'unknown'), 0) AS cached_tokens,
+                   WHERE m.turn_id = t.id), 0) AS cached_tokens,
          (SELECT COUNT(*) FROM tool_calls tc WHERE tc.turn_id = t.id) AS tool_call_count,
          COALESCE((SELECT SUM(CASE WHEN tc.is_error != 0 THEN 1 ELSE 0 END) FROM tool_calls tc
                    WHERE tc.turn_id = t.id), 0) AS error_count,

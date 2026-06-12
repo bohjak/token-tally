@@ -111,7 +111,10 @@ function registerUsageCommand(pi: ExtensionAPI): void {
         return;
       }
 
-      const { db, close } = openResult;
+      const { db, close, schemaWarning } = openResult;
+      if (schemaWarning) {
+        notify(schemaWarning, "warning");
+      }
       try {
         const tab = args.tab ?? "summary";
         const data = runQuery(db, { tab, since: args.since });

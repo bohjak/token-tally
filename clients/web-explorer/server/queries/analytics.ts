@@ -60,15 +60,15 @@ export function queryCostBucket(db: Database.Database, opts: QueryOpts): CostBuc
   const row = db
     .prepare(
       `SELECT
-         COALESCE(SUM(cost_total_micros), 0) / 1000000.0 AS cost_usd,
+         COALESCE(SUM(CASE WHEN cost_source != 'unknown' THEN cost_total_micros ELSE 0 END), 0) / 1000000.0 AS cost_usd,
          COALESCE(SUM(input_tokens + output_tokens), 0) AS billable_tokens,
          COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens), 0) AS tokens,
          COALESCE(SUM(input_tokens), 0) AS input_tokens,
          COALESCE(SUM(output_tokens), 0) AS output_tokens,
          COALESCE(SUM(cache_read_tokens + cache_write_tokens), 0) AS cached_tokens,
-         COALESCE(SUM(cost_cache_read_micros + cost_cache_write_micros), 0) / 1000000.0 AS cached_cost_usd,
+         COALESCE(SUM(CASE WHEN cost_source != 'unknown' THEN cost_cache_read_micros + cost_cache_write_micros ELSE 0 END), 0) / 1000000.0 AS cached_cost_usd,
          COALESCE(SUM(
-           CASE WHEN input_tokens > 0
+           CASE WHEN cost_source != 'unknown' AND input_tokens > 0
              THEN (cache_read_tokens + cache_write_tokens) * (cost_input_micros * 1.0 / input_tokens)
                   - (cost_cache_read_micros + cost_cache_write_micros)
              ELSE 0
@@ -78,7 +78,7 @@ export function queryCostBucket(db: Database.Database, opts: QueryOpts): CostBuc
          COUNT(DISTINCT session_id) AS sessions,
          COUNT(*) AS messages
        FROM llm_messages
-       WHERE ts >= ? AND ts <= ? AND cost_source != 'unknown' ${hf.clause}`
+       WHERE ts >= ? AND ts <= ? ${hf.clause}`
     )
     .get(from, to, ...hf.params) as {
       cost_usd: number; billable_tokens: number; tokens: number;
@@ -114,15 +114,15 @@ export function queryCostBucketForSession(db: Database.Database, sessionId: stri
   const row = db
     .prepare(
       `SELECT
-         COALESCE(SUM(cost_total_micros), 0) / 1000000.0 AS cost_usd,
+         COALESCE(SUM(CASE WHEN cost_source != 'unknown' THEN cost_total_micros ELSE 0 END), 0) / 1000000.0 AS cost_usd,
          COALESCE(SUM(input_tokens + output_tokens), 0) AS billable_tokens,
          COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens), 0) AS tokens,
          COALESCE(SUM(input_tokens), 0) AS input_tokens,
          COALESCE(SUM(output_tokens), 0) AS output_tokens,
          COALESCE(SUM(cache_read_tokens + cache_write_tokens), 0) AS cached_tokens,
-         COALESCE(SUM(cost_cache_read_micros + cost_cache_write_micros), 0) / 1000000.0 AS cached_cost_usd,
+         COALESCE(SUM(CASE WHEN cost_source != 'unknown' THEN cost_cache_read_micros + cost_cache_write_micros ELSE 0 END), 0) / 1000000.0 AS cached_cost_usd,
          COALESCE(SUM(
-           CASE WHEN input_tokens > 0
+           CASE WHEN cost_source != 'unknown' AND input_tokens > 0
              THEN (cache_read_tokens + cache_write_tokens) * (cost_input_micros * 1.0 / input_tokens)
                   - (cost_cache_read_micros + cost_cache_write_micros)
              ELSE 0
@@ -132,7 +132,7 @@ export function queryCostBucketForSession(db: Database.Database, sessionId: stri
          COUNT(DISTINCT session_id) AS sessions,
          COUNT(*) AS messages
        FROM llm_messages
-       WHERE session_id = ? AND cost_source != 'unknown'`
+       WHERE session_id = ?`
     )
     .get(sessionId) as {
       cost_usd: number; billable_tokens: number; tokens: number;
@@ -173,11 +173,11 @@ export function querySummary(db: Database.Database, opts: QueryOpts) {
     .prepare(
       `SELECT
          COALESCE(m.model_id, t.model_id, 'unattributed') AS model_id,
-         COALESCE(SUM(m.cost_total_micros), 0) / 1000000.0 AS cost_usd,
+         COALESCE(SUM(CASE WHEN m.cost_source != 'unknown' THEN m.cost_total_micros ELSE 0 END), 0) / 1000000.0 AS cost_usd,
          COUNT(DISTINCT t.id) AS turns
        FROM llm_messages m
        LEFT JOIN turns t ON t.id = m.turn_id
-       WHERE m.ts >= ? AND m.ts <= ? AND m.cost_source != 'unknown' ${hf.clause}
+       WHERE m.ts >= ? AND m.ts <= ? ${hf.clause}
        GROUP BY 1
        ORDER BY cost_usd DESC
        LIMIT 1`
@@ -196,10 +196,10 @@ export function querySummary(db: Database.Database, opts: QueryOpts) {
            WHEN s.cwd IS NOT NULL THEN s.cwd
            ELSE 'unknown'
          END AS repo,
-         COALESCE(SUM(m.cost_total_micros), 0) / 1000000.0 AS cost_usd
+         COALESCE(SUM(CASE WHEN m.cost_source != 'unknown' THEN m.cost_total_micros ELSE 0 END), 0) / 1000000.0 AS cost_usd
        FROM llm_messages m
        LEFT JOIN sessions s ON s.id = m.session_id
-       WHERE m.ts >= ? AND m.ts <= ? AND m.cost_source != 'unknown' ${hf.clause}
+       WHERE m.ts >= ? AND m.ts <= ? ${hf.clause}
        GROUP BY repo
        ORDER BY cost_usd DESC
        LIMIT 1`
@@ -235,7 +235,7 @@ export function queryDaily(db: Database.Database, opts: QueryOpts): { rows: Dail
     .prepare(
       `SELECT
          date(ts / 1000, 'unixepoch', 'localtime') AS date,
-         COALESCE(SUM(cost_total_micros), 0) / 1000000.0 AS cost_usd,
+         COALESCE(SUM(CASE WHEN cost_source != 'unknown' THEN cost_total_micros ELSE 0 END), 0) / 1000000.0 AS cost_usd,
          COALESCE(SUM(input_tokens + output_tokens), 0) AS billable_tokens,
          COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens), 0) AS tokens,
          COALESCE(SUM(input_tokens), 0) AS input_tokens,
@@ -243,11 +243,11 @@ export function queryDaily(db: Database.Database, opts: QueryOpts): { rows: Dail
          COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
          COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
          COALESCE(SUM(cache_read_tokens + cache_write_tokens), 0) AS cached_tokens,
-         COALESCE(SUM(cost_cache_read_micros + cost_cache_write_micros), 0) / 1000000.0 AS cached_cost_usd,
+         COALESCE(SUM(CASE WHEN cost_source != 'unknown' THEN cost_cache_read_micros + cost_cache_write_micros ELSE 0 END), 0) / 1000000.0 AS cached_cost_usd,
          COUNT(DISTINCT turn_id) AS turns,
          COUNT(*) AS messages
        FROM llm_messages
-       WHERE ts >= ? AND ts <= ? AND cost_source != 'unknown' ${hf.clause}
+       WHERE ts >= ? AND ts <= ? ${hf.clause}
        GROUP BY date
        ORDER BY date ASC`
     )
@@ -325,7 +325,7 @@ export function queryHourly(db: Database.Database, opts: QueryOpts): { rows: Hou
     .prepare(
       `SELECT
          strftime('%Y-%m-%d %H:00', ts / 1000, 'unixepoch', 'localtime') AS hour,
-         COALESCE(SUM(cost_total_micros), 0) / 1000000.0 AS cost_usd,
+         COALESCE(SUM(CASE WHEN cost_source != 'unknown' THEN cost_total_micros ELSE 0 END), 0) / 1000000.0 AS cost_usd,
          COALESCE(SUM(input_tokens + output_tokens), 0) AS billable_tokens,
          COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens), 0) AS tokens,
          COALESCE(SUM(input_tokens), 0) AS input_tokens,
@@ -333,11 +333,11 @@ export function queryHourly(db: Database.Database, opts: QueryOpts): { rows: Hou
          COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
          COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
          COALESCE(SUM(cache_read_tokens + cache_write_tokens), 0) AS cached_tokens,
-         COALESCE(SUM(cost_cache_read_micros + cost_cache_write_micros), 0) / 1000000.0 AS cached_cost_usd,
+         COALESCE(SUM(CASE WHEN cost_source != 'unknown' THEN cost_cache_read_micros + cost_cache_write_micros ELSE 0 END), 0) / 1000000.0 AS cached_cost_usd,
          COUNT(DISTINCT turn_id) AS turns,
          COUNT(*) AS messages
        FROM llm_messages
-       WHERE ts >= ? AND ts <= ? AND cost_source != 'unknown' ${hf.clause}
+       WHERE ts >= ? AND ts <= ? ${hf.clause}
        GROUP BY hour
        ORDER BY hour ASC`
     )
@@ -383,20 +383,20 @@ export function queryModels(db: Database.Database, opts: QueryOpts): { rows: Mod
     .prepare(
       `SELECT
          COALESCE(NULLIF(m.model_id, ''), NULLIF(t.model_id, ''), 'unattributed') AS model_id,
-         COALESCE(SUM(m.cost_total_micros), 0) / 1000000.0 AS cost_usd,
+         COALESCE(SUM(CASE WHEN m.cost_source != 'unknown' THEN m.cost_total_micros ELSE 0 END), 0) / 1000000.0 AS cost_usd,
          COALESCE(SUM(m.input_tokens + m.output_tokens), 0) AS billable_tokens,
          COALESCE(SUM(m.input_tokens + m.cache_read_tokens + m.cache_write_tokens), 0) AS tokens_in,
          COALESCE(SUM(m.cache_read_tokens), 0) AS cache_read_tokens,
          COALESCE(SUM(m.cache_write_tokens), 0) AS cache_write_tokens,
          COALESCE(SUM(m.cache_read_tokens + m.cache_write_tokens), 0) AS cached_tokens,
-         COALESCE(SUM(m.cost_cache_read_micros + m.cost_cache_write_micros), 0) / 1000000.0 AS cached_cost_usd,
+         COALESCE(SUM(CASE WHEN m.cost_source != 'unknown' THEN m.cost_cache_read_micros + m.cost_cache_write_micros ELSE 0 END), 0) / 1000000.0 AS cached_cost_usd,
          COALESCE(SUM(m.input_tokens + m.output_tokens + m.cache_read_tokens + m.cache_write_tokens), 0) AS total_tokens,
          COALESCE(SUM(m.output_tokens), 0) AS output_tokens,
          COUNT(DISTINCT m.turn_id) AS turns,
          m.harness_id
        FROM llm_messages m
        LEFT JOIN turns t ON t.id = m.turn_id
-       WHERE m.ts >= ? AND m.ts <= ? AND m.cost_source != 'unknown' ${hf.clause} ${modelClause}
+       WHERE m.ts >= ? AND m.ts <= ? ${hf.clause} ${modelClause}
        GROUP BY 1, m.harness_id
        ORDER BY cost_usd DESC
        LIMIT 20`
@@ -471,7 +471,7 @@ export function queryRepos(db: Database.Database, opts: QueryOpts): { rows: Repo
       `SELECT
          ${repoExpr} AS repo,
          m.harness_id,
-         COALESCE(SUM(m.cost_total_micros), 0) / 1000000.0 AS cost_usd,
+         COALESCE(SUM(CASE WHEN m.cost_source != 'unknown' THEN m.cost_total_micros ELSE 0 END), 0) / 1000000.0 AS cost_usd,
          COALESCE(SUM(m.input_tokens + m.output_tokens), 0) AS billable_tokens,
          COALESCE(SUM(m.input_tokens + m.output_tokens + m.cache_read_tokens + m.cache_write_tokens), 0) AS tokens,
          COALESCE(SUM(m.output_tokens), 0) AS output_tokens,
@@ -479,7 +479,7 @@ export function queryRepos(db: Database.Database, opts: QueryOpts): { rows: Repo
          COUNT(DISTINCT m.session_id) AS sessions
        FROM llm_messages m
        LEFT JOIN sessions s ON s.id = m.session_id
-       WHERE m.ts >= ? AND m.ts <= ? AND m.cost_source != 'unknown' ${hf.clause} ${repoClause}
+       WHERE m.ts >= ? AND m.ts <= ? ${hf.clause} ${repoClause}
        GROUP BY repo, m.harness_id
        ORDER BY cost_usd DESC
        LIMIT 20`

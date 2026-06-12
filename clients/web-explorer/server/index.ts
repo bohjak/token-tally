@@ -8,6 +8,7 @@ import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openReadOnly, defaultDatabasePath } from "./db.js";
+import type { SchemaStatus } from "./db.js";
 import {
   querySummary,
   queryDaily,
@@ -18,7 +19,7 @@ import {
   queryTools,
 } from "./queries/analytics.js";
 import { listSessions, getSession, getTurnDetail } from "./queries/sessions.js";
-import { listHarnesses, getSchemaVersion } from "./queries/meta.js";
+import { listHarnesses } from "./queries/meta.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -135,7 +136,13 @@ function shutdown(
  * @param updateActivity - Called on every /api/* request so the idle-timeout
  *   loop knows the browser is still actively using the server.
  */
-function buildApp(db: Database, dbPath: string, updateActivity: () => void) {
+function buildApp(
+  db: Database,
+  dbPath: string,
+  updateActivity: () => void,
+  schemaStatus: SchemaStatus = "ok",
+  schemaVersion: number = 0,
+) {
   const app = new Hono();
 
   // Track last activity time for all API requests. This middleware runs before
@@ -150,8 +157,8 @@ function buildApp(db: Database, dbPath: string, updateActivity: () => void) {
   // Health — includes pid so the launcher can verify it's talking to the right
   // server process when checking for a reusable instance.
   app.get("/api/health", (c) => {
-    const schemaVersion = getSchemaVersion(db);
-    return c.json({ ok: true, dbPath, pid: process.pid, schemaVersion });
+    // schemaStatus='degraded' means DB schema is ahead but within forward window.
+    return c.json({ ok: true, dbPath, pid: process.pid, schemaVersion, schemaStatus });
   });
 
   // Heartbeat — browser sends this every 30 s to keep the idle timeout clock
@@ -279,7 +286,15 @@ export async function main(
     process.exit(1);
   }
 
-  const { db, close } = opened;
+  const { db, close, schemaStatus, schemaVersion } = opened;
+
+  // Warn about degraded mode on startup.
+  if (schemaStatus === "degraded") {
+    console.warn(
+      `[web-explorer] Database schema version ${schemaVersion} is ahead of this build ` +
+      `(max known: 1, forward window: 2). Operating in degraded read-only mode.`,
+    );
+  }
 
   // Activity timestamp — updated by the /api/* middleware on every API request.
   // Used by the idle-timeout loop to decide when to shut down.
@@ -289,7 +304,7 @@ export async function main(
   };
 
   const port = await findFreePort(preferredPort);
-  const app = buildApp(db, dbPath, updateActivity);
+  const app = buildApp(db, dbPath, updateActivity, schemaStatus, schemaVersion);
   const url = `http://127.0.0.1:${port}`;
 
   const server = serve({ fetch: app.fetch, port, hostname: "127.0.0.1" }, () => {
