@@ -21,9 +21,9 @@
       "types": "./dist/src/index.d.ts"
     },
     "./pricing": {
+      "types": "./dist/src/pricing/index.d.ts",
       "require": "./dist/src/pricing/index.js",
-      "default": "./dist/src/pricing/index.js",
-      "types": "./dist/src/pricing/index.d.ts"
+      "default": "./dist/src/pricing/index.js"
     }
   },
   "bin": {
