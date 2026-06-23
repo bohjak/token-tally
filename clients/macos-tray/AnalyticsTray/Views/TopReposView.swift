@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Lists the top five repositories by cost for the rolling 7-day window.
+/// Lists the top five repositories by cost for the configured time window.
 ///
 /// Repository labels are derived from sessions in priority order:
 /// `owner/name` → `repo_remote` → `cwd` → `"unknown"`.
@@ -8,6 +8,8 @@ import SwiftUI
 struct TopReposView: View {
 
     let repos: [RepoBreakdown]
+    /// Short label appended to the section heading, e.g. "Today" or "7 days".
+    let periodLabel: String
 
     private var totalCost: Double {
         repos.reduce(0) { $0 + max($1.costUSD, 0) }
@@ -17,7 +19,7 @@ struct TopReposView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            sectionLabel("Top Repos")
+            sectionLabel("Top Repos", period: periodLabel)
             if repos.isEmpty {
                 placeholderRow("No repository data")
             } else {
@@ -75,8 +77,8 @@ struct TopReposView: View {
             .foregroundStyle(.tertiary)
     }
 
-    private func sectionLabel(_ text: String) -> some View {
-        Text(text.uppercased())
+    private func sectionLabel(_ text: String, period: String) -> some View {
+        Text("\(text.uppercased()) · \(period.uppercased())")
             .font(.caption2)
             .fontWeight(.semibold)
             .foregroundStyle(.secondary)

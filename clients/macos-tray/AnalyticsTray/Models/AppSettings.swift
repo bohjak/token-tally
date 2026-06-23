@@ -1,5 +1,35 @@
 import Foundation
 
+// MARK: - TopListsPeriod
+
+/// Controls the time window used for the "Top Models" and "Top Repos" sections
+/// in the tray popover.
+enum TopListsPeriod: String, CaseIterable, Identifiable {
+    /// Show data for calendar today (since local midnight).
+    case today
+    /// Show data for the rolling 7-day window (today + 6 prior days).
+    case week7
+
+    var id: String { rawValue }
+
+    /// Human-readable label used in the Settings UI.
+    var displayName: String {
+        switch self {
+        case .today: return "Today"
+        case .week7: return "Past 7 days"
+        }
+    }
+
+    /// Short label shown next to the section heading in the popover
+    /// (e.g. "TOP MODELS · TODAY").
+    var sectionLabel: String {
+        switch self {
+        case .today: return "Today"
+        case .week7: return "7 days"
+        }
+    }
+}
+
 // MARK: - MenuBarDisplayMode
 
 /// Controls what the `NSStatusItem` label shows.
@@ -45,6 +75,7 @@ final class AppSettings: ObservableObject {
         static let refreshInterval    = "com.token-tally.refreshInterval"
         static let menuBarDisplayMode = "com.token-tally.menuBarDisplayMode"
         static let launchAtLogin      = "com.token-tally.launchAtLogin"
+        static let topListsPeriod     = "com.token-tally.topListsPeriod"
     }
 
     // MARK: Defaults
@@ -60,6 +91,7 @@ final class AppSettings: ObservableObject {
     /// persistent menu bar presence and has no value if it doesn't auto-start.
     /// Users can disable it from Settings.
     static let defaultLaunchAtLogin = true
+    static let defaultTopListsPeriod: TopListsPeriod = .week7
 
     // MARK: Published properties
 
@@ -87,6 +119,13 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(launchAtLogin, forKey: Key.launchAtLogin) }
     }
 
+    /// Time window used for the "Top Models" and "Top Repos" sections in the popover.
+    @Published var topListsPeriod: TopListsPeriod {
+        didSet {
+            UserDefaults.standard.set(topListsPeriod.rawValue, forKey: Key.topListsPeriod)
+        }
+    }
+
     // MARK: Init
 
     init() {
@@ -111,6 +150,13 @@ final class AppSettings: ObservableObject {
             ? UserDefaults.standard.bool(forKey: Key.launchAtLogin)
             : AppSettings.defaultLaunchAtLogin
 
+        if let raw = UserDefaults.standard.string(forKey: Key.topListsPeriod),
+           let period = TopListsPeriod(rawValue: raw) {
+            topListsPeriod = period
+        } else {
+            topListsPeriod = AppSettings.defaultTopListsPeriod
+        }
+
         // Remove the retired harness filter preference so old installations do
         // not keep stale settings that no longer have UI.
         UserDefaults.standard.removeObject(forKey: "com.token-tally.enabledHarnesses")
@@ -121,7 +167,7 @@ final class AppSettings: ObservableObject {
     /// Resets all settings to their defaults and removes persisted values.
     func resetToDefaults() {
         [Key.databasePath, Key.refreshInterval,
-         Key.menuBarDisplayMode, Key.launchAtLogin].forEach {
+         Key.menuBarDisplayMode, Key.launchAtLogin, Key.topListsPeriod].forEach {
             UserDefaults.standard.removeObject(forKey: $0)
         }
         UserDefaults.standard.removeObject(forKey: "com.token-tally.enabledHarnesses")
@@ -129,5 +175,6 @@ final class AppSettings: ObservableObject {
         refreshInterval = AppSettings.defaultRefreshInterval
         menuBarDisplayMode = AppSettings.defaultMenuBarDisplayMode
         launchAtLogin = AppSettings.defaultLaunchAtLogin
+        topListsPeriod = AppSettings.defaultTopListsPeriod
     }
 }

@@ -107,13 +107,14 @@ final class AnalyticsStore: ObservableObject {
         state = .loading
         updateMenuBarTitle()
 
-        // Capture the path as a value so the detached task doesn't touch self.
-        let path = settings.databasePath
+        // Capture settings values so the detached task doesn't touch self.
+        let path   = settings.databasePath
+        let period = settings.topListsPeriod
 
         // Run the blocking SQLite work entirely off the main thread.
         // Task.detached does not inherit the caller's actor isolation.
         let result: Result<UsageSnapshot, Error> = await Task.detached(priority: .userInitiated) {
-            Result { try AnalyticsQueries.loadSnapshot(databasePath: path) }
+            Result { try AnalyticsQueries.loadSnapshot(databasePath: path, topListsPeriod: period) }
         }.value
 
         // Ignore the result if the task was cancelled while the DB was being read.
@@ -228,6 +229,17 @@ final class AnalyticsStore: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.updateMenuBarTitle()
+            }
+            .store(in: &cancellables)
+
+        // When the top-lists period changes: reload from the database so the
+        // popover immediately reflects the new window.
+        settings.$topListsPeriod
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.refresh()
             }
             .store(in: &cancellables)
     }

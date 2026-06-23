@@ -223,12 +223,18 @@ struct PopoverView: View {
 
             // 4. Top models.
             if !snapshot.topModels.isEmpty {
-                TopModelsView(models: snapshot.topModels)
+                TopModelsView(
+                    models: snapshot.topModels,
+                    periodLabel: snapshot.topListsPeriod.sectionLabel
+                )
             }
 
             // 5. Top repositories.
             if !snapshot.topRepos.isEmpty {
-                TopReposView(repos: snapshot.topRepos)
+                TopReposView(
+                    repos: snapshot.topRepos,
+                    periodLabel: snapshot.topListsPeriod.sectionLabel
+                )
             }
 
             // 6. Unpriced-messages caveat (reader expectation #4 from docs/schema.md).

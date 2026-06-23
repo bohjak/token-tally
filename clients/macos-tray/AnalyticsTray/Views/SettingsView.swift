@@ -53,6 +53,7 @@ struct SettingsView: View {
             databaseSection
             refreshSection
             displaySection
+            popoverSection
             accountingSection
             startupSection
             resetSection
@@ -61,7 +62,7 @@ struct SettingsView: View {
         // NSHostingController does not always derive a useful intrinsic height
         // for macOS Form content inside an AppKit-created settings window. Use
         // an explicit size so the window does not open as an empty shell.
-        .frame(width: 420, height: 540)
+        .frame(width: 420, height: 620)
         .onAppear {
             validatePath()
             reloadAccountingStatus()
@@ -127,6 +128,17 @@ struct SettingsView: View {
             Picker("Display", selection: $settings.menuBarDisplayMode) {
                 ForEach(MenuBarDisplayMode.allCases) { mode in
                     Text(mode.displayName).tag(mode)
+                }
+            }
+            .pickerStyle(.radioGroup)
+        }
+    }
+
+    private var popoverSection: some View {
+        Section("Popover") {
+            Picker("Top Models & Repos", selection: $settings.topListsPeriod) {
+                ForEach(TopListsPeriod.allCases) { period in
+                    Text(period.displayName).tag(period)
                 }
             }
             .pickerStyle(.radioGroup)

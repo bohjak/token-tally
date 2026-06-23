@@ -85,4 +85,11 @@ struct UsageSnapshot: Equatable {
     /// When true the popover shows a non-blocking update banner; the tray can
     /// still read all data it understands from older schema columns.
     let schemaIsDegraded: Bool
+
+    /// The time window used to produce `topModels` and `topRepos`.
+    ///
+    /// Carried here so the popover can label the sections correctly
+    /// (e.g. "TOP MODELS · TODAY" vs. "TOP MODELS · 7 DAYS") without needing
+    /// a separate reference to `AppSettings`.
+    let topListsPeriod: TopListsPeriod
 }

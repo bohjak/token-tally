@@ -91,7 +91,8 @@ enum AnalyticsQueries {
     static func loadSnapshot(
         databasePath: String,
         now: Date = Date(),
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        topListsPeriod: TopListsPeriod = .week7
     ) throws -> UsageSnapshot {
         let database = try AnalyticsDatabase(path: databasePath)
         let schema = try database.validateAnalyticsSchema()
@@ -115,8 +116,9 @@ enum AnalyticsQueries {
         let rawIntraday   = try database.queryIntradayUsage(since: todayMillis, bucketMinutes: 15)
         let intradayUsage = fillMissingIntradayBuckets(rawIntraday, from: todayStart, through: now, bucketMinutes: 15)
 
-        let topModels        = try database.queryTopModels(since: weekMillis, schema: schema)
-        let topRepos         = try database.queryTopRepos(since: weekMillis)
+        let topMillis        = topListsPeriod == .today ? todayMillis : weekMillis
+        let topModels        = try database.queryTopModels(since: topMillis, schema: schema)
+        let topRepos         = try database.queryTopRepos(since: topMillis)
         let harnessBreakdowns = try database.queryHarnessBreakdowns(since: weekMillis)
 
         return UsageSnapshot(
@@ -134,7 +136,8 @@ enum AnalyticsQueries {
             unpricedMessages: week.unpricedMessages,
             // Forward the degraded flag so PopoverView can show the update
             // banner without making a second database query.
-            schemaIsDegraded: schema.schemaIsDegraded
+            schemaIsDegraded: schema.schemaIsDegraded,
+            topListsPeriod: topListsPeriod
         )
     }
 

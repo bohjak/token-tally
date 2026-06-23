@@ -1,12 +1,14 @@
 import SwiftUI
 
-/// Lists the top five models by cost for the rolling 7-day window.
+/// Lists the top five models by cost for the configured time window.
 ///
 /// Model IDs come from `llm_messages.model_id` (preferred) or `turns.model_id`
 /// (fallback). Rows that still cannot be attributed display "unattributed".
 struct TopModelsView: View {
 
     let models: [ModelBreakdown]
+    /// Short label appended to the section heading, e.g. "Today" or "7 days".
+    let periodLabel: String
 
     private var totalCost: Double {
         models.reduce(0) { $0 + max($1.costUSD, 0) }
@@ -16,7 +18,7 @@ struct TopModelsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            sectionLabel("Top Models")
+            sectionLabel("Top Models", period: periodLabel)
             if models.isEmpty {
                 placeholderRow("No model data")
             } else {
@@ -75,8 +77,8 @@ struct TopModelsView: View {
             .foregroundStyle(.tertiary)
     }
 
-    private func sectionLabel(_ text: String) -> some View {
-        Text(text.uppercased())
+    private func sectionLabel(_ text: String, period: String) -> some View {
+        Text("\(text.uppercased()) · \(period.uppercased())")
             .font(.caption2)
             .fontWeight(.semibold)
             .foregroundStyle(.secondary)
